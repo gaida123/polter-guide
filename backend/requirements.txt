@@ -10,6 +10,13 @@ httpx==0.27.2
 uagents==0.23.7
 uagents-core>=0.4.3
 
+# LangGraph — typed stateful workflow orchestration
+langgraph>=0.2.60
+langchain-core>=0.3.0
+
+# MCP — Model Context Protocol server (exposes HandOff.AI as an AI tool provider)
+mcp>=1.1.0
+
 # Firebase Admin SDK (Firestore + Realtime Database)
 firebase-admin==6.5.0
 

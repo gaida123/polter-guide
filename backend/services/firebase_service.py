@@ -236,6 +236,12 @@ def update_session_status(session_id: str, status: SessionStatus,
     ref.update(payload)
 
 
+def update_session_step_index(session_id: str, step_index: int) -> None:
+    """Advance the persisted step pointer after a successful workflow turn."""
+    ref = get_realtime_db().reference(f"sessions/{session_id}")
+    ref.update({"current_step_index": step_index})
+
+
 def append_autofill_log(session_id: str, entry: dict) -> None:
     ref = get_realtime_db().reference(f"sessions/{session_id}/autofill_log")
     existing = ref.get() or []

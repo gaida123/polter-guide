@@ -4,16 +4,24 @@ HandOff.AI — FastAPI application entry point.
 Exposes:
   - REST routes:  /sops, /sessions, /admin
   - WebSocket:    /ws/{session_id}  ← Ghost Cursor real-time bridge
+  - MCP server:   /mcp/sse + /mcp/messages  ← Model Context Protocol endpoint
 
-The WebSocket handler acts as the bridge between the frontend and the
-Fetch.ai Context Agent.  On each inbound message it:
-  1. Parses the WsInbound envelope.
-  2. Sends a StepRequest to the Context Agent via HTTP (uAgents submit endpoint).
-  3. Awaits the StepResponse via an asyncio.Future keyed on session_id.
-  4. Pushes the WsOutbound envelope back to the frontend.
+WebSocket flow (refactored to use LangGraph):
+  The previous architecture forwarded each message to the Fetch.ai Context
+  Agent via httpx, then waited for a /internal/agent-response callback.
+  This added two HTTP round-trips and required a global pending-futures dict.
 
-Firebase Realtime DB is also updated inside the Context Agent, giving the
-frontend a second, zero-latency cursor-sync channel that bypasses WebSocket.
+  The new flow calls the LangGraph guidance_graph *directly* inside the
+  WebSocket handler:
+    1. Parse WsInbound message
+    2. Call run_guidance_step() — runs classify_intent → resolve_knowledge
+       → resolve_vision → finalize nodes with MemorySaver checkpointing
+    3. Build WsOutbound from the returned GuidanceState
+    4. Push to frontend
+
+  The Fetch.ai uAgents (context / knowledge / vision) remain running in
+  background threads for the Agentverse mesh and agent-to-agent flows;
+  they also use run_guidance_step() internally for consistency.
 """
 
 import asyncio
@@ -23,9 +31,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
-import httpx
 import structlog
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
@@ -35,10 +42,12 @@ from api.routes import admin as admin_router
 from config import settings
 from models import (
     WsInbound, WsOutbound, WsMessageType,
-    StepRequest, StepResponse, AgentError,
     SessionStatus,
 )
-from services.firebase_service import update_session_status, get_session_state
+from services.firebase_service import (
+    update_session_status, get_session_state, append_autofill_log,
+)
+from services.workflow import run_guidance_step, GuidanceState
 
 # ── Structured logging ────────────────────────────────────────────────────────
 
@@ -48,11 +57,6 @@ structlog.configure(
     )
 )
 logger = structlog.get_logger()
-
-# ── In-flight response futures keyed by session_id ───────────────────────────
-# The Context Agent POSTs its response back to /internal/agent-response,
-# where the matching future is resolved and the WebSocket handler picks it up.
-_pending_futures: dict[str, asyncio.Future] = {}
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -68,8 +72,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="HandOff.AI API",
-    description="Agentic AI Co-Pilot for B2B SaaS onboarding",
-    version="0.1.0",
+    description="Agentic AI Co-Pilot for B2B SaaS onboarding — powered by LangGraph + Fetch.ai",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -91,33 +95,26 @@ async def root():
     return RedirectResponse(url="/docs")
 
 
-# ── Health check ─────────────────────────────────────────────────────────────
-
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "workflow_engine": "langgraph",
+    }
 
 
-# ── Internal endpoint — Context Agent posts responses here ───────────────────
+# ── MCP Server (Model Context Protocol) ──────────────────────────────────────
+# HandOff.AI exposes its core capabilities as MCP tools so external AI
+# systems (e.g. Claude Desktop, other agents) can drive guided workflows.
 
-@app.post("/internal/agent-response", include_in_schema=False)
-async def receive_agent_response(payload: dict):
-    """
-    The Context Agent calls this endpoint with a StepResponse or AgentError
-    after finishing its orchestration cycle.
-    """
-    session_id: Optional[str] = payload.get("session_id")
-    if not session_id:
-        return {"error": "missing session_id"}
+from mcp_server import create_mcp_server, mount_mcp
 
-    future = _pending_futures.get(session_id)
-    if future and not future.done():
-        future.set_result(payload)
-
-    return {"received": True}
+_mcp = create_mcp_server()
+mount_mcp(app, _mcp)
 
 
-# ── WebSocket — Ghost Cursor real-time bridge ─────────────────────────────────
+# ── WebSocket — LangGraph-powered Ghost Cursor bridge ────────────────────────
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
@@ -184,69 +181,64 @@ async def _dispatch_ws_message(
 
 async def _handle_step_advance(websocket: WebSocket, session_id: str, payload: dict):
     """
-    Build a StepRequest and forward it to the Context Agent.
-    Wait for the StepResponse (or AgentError) with a 15-second timeout.
+    Run one turn of the LangGraph guidance workflow and forward the result
+    to the frontend WebSocket client.
+
+    The LangGraph MemorySaver checkpointer (keyed on session_id) persists the
+    step index between turns, so the session can be resumed after a disconnect.
     """
     session_data = get_session_state(session_id)
     if not session_data:
         await _send_error(websocket, session_id, "Session not found")
         return
 
-    step_request = StepRequest(
-        session_id=session_id,
-        user_id=session_data["user_id"],
-        product_id=session_data["product_id"],
-        sop_id=session_data["sop_id"],
-        current_step_index=session_data.get("current_step_index", 0),
-        screenshot_base64=payload.get("screenshot_base64", ""),
-        voice_command=payload.get("voice_command"),
-    )
-
-    # Register a future for this session
-    loop = asyncio.get_event_loop()
-    future: asyncio.Future = loop.create_future()
-    _pending_futures[session_id] = future
-
     try:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                settings.context_agent_endpoint,
-                json=step_request.model_dump(mode="json"),
-                timeout=5.0,
-            )
-    except Exception as exc:
-        logger.warning("Could not reach Context Agent: %s", exc)
-        await _send_error(websocket, session_id, "Agent temporarily unavailable")
-        _pending_futures.pop(session_id, None)
-        return
-
-    try:
-        result: dict = await asyncio.wait_for(future, timeout=15.0)
-    except asyncio.TimeoutError:
-        await _send_error(websocket, session_id, "Agent response timed out")
-        _pending_futures.pop(session_id, None)
-        return
-    finally:
-        _pending_futures.pop(session_id, None)
-
-    # Determine if this is a StepResponse or AgentError
-    if "error_code" in result:
-        await _send(websocket, WsOutbound(
-            type=WsMessageType.ERROR,
+        result: GuidanceState = await run_guidance_step(
             session_id=session_id,
-            payload=result,
-        ))
+            user_id=session_data.get("user_id", ""),
+            product_id=session_data.get("product_id", ""),
+            sop_id=session_data.get("sop_id", ""),
+            current_step_index=session_data.get("current_step_index", 0),
+            screenshot_base64=payload.get("screenshot_base64", ""),
+            voice_command=payload.get("voice_command"),
+            user_query=payload.get("user_query"),
+        )
+    except Exception as exc:
+        logger.error("LangGraph workflow error", session_id=session_id, error=str(exc))
+        await _send_error(websocket, session_id, f"Workflow error: {exc}")
         return
 
-    # Destructive action guardrail
+    if result.get("error"):
+        await _send_error(websocket, session_id, result["error"])
+        return
+
+    step_data = {
+        "session_id": session_id,
+        "step_index": result.get("resolved_step_index", 0),
+        "total_steps": result.get("total_steps", 1),
+        "instruction_text": result.get("instruction_text", ""),
+        "target_x": result.get("target_x", 0.5),
+        "target_y": result.get("target_y", 0.5),
+        "requires_autofill": result.get("requires_autofill", False),
+        "autofill_value": result.get("autofill_value"),
+        "is_destructive": result.get("is_destructive", False),
+        "is_final_step": result.get("is_final_step", False),
+        "detected_error_modal": result.get("detected_error_modal", False),
+        "error_modal_text": result.get("error_modal_text"),
+        "vision_confidence": result.get("vision_confidence", 0.0),
+        "intent": result.get("intent"),
+        "matched_sop_name": result.get("matched_sop_name"),
+    }
+
+    # Guardrail: destructive steps surface a warning before proceeding
     if result.get("is_destructive"):
         await _send(websocket, WsOutbound(
             type=WsMessageType.GUARDRAIL_WARNING,
             session_id=session_id,
             payload={
-                "instruction_text": result.get("instruction_text", ""),
+                "instruction_text": step_data["instruction_text"],
                 "warning": "This action is permanent. Are you sure you want to proceed?",
-                "step_data": result,
+                "step_data": step_data,
             },
         ))
         return
@@ -257,9 +249,9 @@ async def _handle_step_advance(websocket: WebSocket, session_id: str, payload: d
             type=WsMessageType.AUTOFILL_REQUEST,
             session_id=session_id,
             payload={
-                "instruction_text": result.get("instruction_text", ""),
-                "autofill_value": result.get("autofill_value"),
-                "step_data": result,
+                "instruction_text": step_data["instruction_text"],
+                "autofill_value": step_data["autofill_value"],
+                "step_data": step_data,
             },
         ))
         return
@@ -267,7 +259,7 @@ async def _handle_step_advance(websocket: WebSocket, session_id: str, payload: d
     await _send(websocket, WsOutbound(
         type=WsMessageType.STEP_UPDATE,
         session_id=session_id,
-        payload=result,
+        payload=step_data,
     ))
 
     if result.get("is_final_step"):
@@ -279,8 +271,7 @@ async def _handle_step_advance(websocket: WebSocket, session_id: str, payload: d
 
 
 async def _handle_autofill_confirm(websocket: WebSocket, session_id: str, payload: dict):
-    """User confirmed autofill — log it and resume the step flow."""
-    from services.firebase_service import append_autofill_log
+    """User confirmed autofill — log it and resume the step data."""
     append_autofill_log(session_id, {
         "step_index": payload.get("step_index"),
         "field_selector": payload.get("field_selector"),
