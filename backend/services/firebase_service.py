@@ -12,7 +12,7 @@ from typing import Optional
 from uuid import uuid4
 
 import firebase_admin
-from firebase_admin import credentials, firestore, db as realtime_db
+from firebase_admin import credentials, firestore, firestore_async, db as realtime_db
 from google.cloud.firestore_v1 import AsyncClient
 
 from config import settings
@@ -43,7 +43,7 @@ def _init_firebase() -> firebase_admin.App:
 
 def get_firestore() -> AsyncClient:
     _init_firebase()
-    return firestore.async_client()
+    return firestore_async.client()
 
 
 def get_realtime_db():
