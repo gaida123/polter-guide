@@ -1,4 +1,4 @@
-import type { SopDocument, SopSummary, SopStep, StepType } from '../types'
+import type { SopDocument, SopSummary, SopStep } from '../types'
 
 const BASE = '/api'
 

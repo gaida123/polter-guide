@@ -9,6 +9,7 @@ import { useSession } from '../hooks/useSession'
 import { useVoice } from '../hooks/useVoice'
 
 const LOCAL_API = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
+const FORCE_AUTO_CLICK_STORAGE_KEY = 'handoff.forceAutoClick'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface IdleHint {
@@ -98,15 +99,26 @@ async function analyzeScreen(
 }
 
 // ── Ghost cursor helper ───────────────────────────────────────────────────────
-function triggerGhostCursor(hint: IdleHint | null) {
+function triggerGhostCursor(
+  hint: IdleHint | null,
+  options?: { allowAutoClick?: boolean; forceAutoClickMode?: boolean },
+) {
   if (!electronAPI?.showGhostCursor) return
   if (hint && hint.target_x != null && hint.target_y != null) {
-    // Convert fractional → screen pixels using the real screen size from Electron
-    const sw = window.screen.width  * window.devicePixelRatio
-    const sh = window.screen.height * window.devicePixelRatio
+    const allowAutoClick = Boolean(options?.allowAutoClick)
+    const forceAutoClickMode = Boolean(options?.forceAutoClickMode)
+    const shouldAutoClick =
+      allowAutoClick &&
+      (forceAutoClickMode || (!hint.on_correct_screen && hint.confidence >= 0.35))
+
     electronAPI.showGhostCursor({
-      x: Math.round(hint.target_x * sw / window.devicePixelRatio),
-      y: Math.round(hint.target_y * sh / window.devicePixelRatio),
+      // Keep normalized coords; Electron main process maps to display pixels.
+      x: hint.target_x,
+      y: hint.target_y,
+      normalized: true,
+      // Optional OS-level click automation. forceAutoClickMode bypasses confidence.
+      autoClick: shouldAutoClick,
+      forceAutoClick: forceAutoClickMode,
     })
   } else {
     electronAPI.hideGhostCursor()
@@ -122,7 +134,6 @@ export default function OverlayPage() {
   // Live SOP steps: either from backend session or DEMO_STEPS fallback
   const [activeSteps, setActiveSteps] = useState<typeof DEMO_STEPS>(DEMO_STEPS)
   const [sessionId,   setSessionId]   = useState<string | null>(sessionParam)
-  const [sessionLoading, setSessionLoading] = useState(!!sessionParam)
 
   // Company SOP picker
   const [availableSops, setAvailableSops] = useState<{id: string; title: string; role: string; steps: any[]}[]>([])
@@ -130,6 +141,10 @@ export default function OverlayPage() {
   const [pickerSopId,   setPickerSopId]   = useState('')
   const [pickerName,    setPickerName]    = useState('')
   const [startingSession, setStartingSession] = useState(false)
+  const [forceAutoClick, setForceAutoClick] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem(FORCE_AUTO_CLICK_STORAGE_KEY) === 'true'
+  })
 
   // Demo state
   const [demoMode,    setDemoMode]    = useState(false)
@@ -158,12 +173,15 @@ export default function OverlayPage() {
   // Backend session
   const session = useSession()
   const [backendStarted, setBackendStarted] = useState(false)
-  const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(FORCE_AUTO_CLICK_STORAGE_KEY, String(forceAutoClick))
+  }, [forceAutoClick])
 
   // ── Load session from backend if ?session= param present ─────────────────
   useEffect(() => {
     if (!sessionParam) return
-    setSessionLoading(true)
     fetch(`${LOCAL_API}/local/sessions/${sessionParam}`)
       .then(r => r.json())
       .then(data => {
@@ -178,7 +196,6 @@ export default function OverlayPage() {
         setDemoStep(data.current_step ?? 0)
       })
       .catch(() => {/* fall back to DEMO_STEPS */})
-      .finally(() => setSessionLoading(false))
   }, [sessionParam]) // eslint-disable-line
 
   // ── Fetch company SOPs from backend ──────────────────────────────────────
@@ -218,22 +235,20 @@ export default function OverlayPage() {
     return () => document.body.classList.remove('overlay-mode')
   }, [])
 
-  // ── Tell Electron the exact pixel height of the widget ───────────────────
-  const isExpanded = demoMode || backendStarted || sopPickerOpen
-
   // ResizeObserver fires automatically whenever the widget grows/shrinks,
   // including during Framer Motion spring animations
   useEffect(() => {
     if (!electronAPI?.setExpanded || !widgetRef.current) return
     const el = widgetRef.current
-    const send = (h: number) => electronAPI.setExpanded(Math.ceil(h) + 2)
+    const send = (h: number) => electronAPI.setExpanded(Math.ceil(h) + 1)
 
     // Send initial height
     send(el.getBoundingClientRect().height || 52)
 
     const ro = new ResizeObserver(entries => {
       const h = entries[0]?.contentRect.height
-      if (h != null && h > 0) send(h)
+      // Fire on every change — including when height drops back to 52 (collapsed)
+      if (h != null) send(h)
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -241,6 +256,15 @@ export default function OverlayPage() {
 
   // Keep chatOpenRef in sync
   useEffect(() => { chatOpenRef.current = chatOpen }, [chatOpen])
+
+  // Backstop: when the content section fully collapses, snap Electron window to 52 px
+  useEffect(() => {
+    if (!electronAPI?.setExpanded) return
+    if (!demoMode && !backendStarted && !sopPickerOpen) {
+      const t = setTimeout(() => electronAPI.setExpanded(52), 350)
+      return () => clearTimeout(t)
+    }
+  }, [demoMode, backendStarted, sopPickerOpen])
 
   // ── Voice ────────────────────────────────────────────────────────────────
   const { state: voiceState, startListening, stopListening, speak } = useVoice({
@@ -257,7 +281,7 @@ export default function OverlayPage() {
         else if (lower.includes('back') || lower.includes('previous')) prevDemoStep()
         else if (lower.includes('stop') || lower.includes('exit')) stopDemo()
       } else {
-        setQuery(text.trim())
+        session.sendVoiceCommand(text.trim())
       }
     },
   })
@@ -278,7 +302,6 @@ export default function OverlayPage() {
 
   const stopDemo = () => {
     setDemoMode(false)
-    setQuery('')
     setIdleHint(null)
     setVerifyHint(null)
     setSopPickerOpen(false)
@@ -337,7 +360,7 @@ export default function OverlayPage() {
           if (!hint.on_correct_screen) {
             setVerifyHint(hint)
             setIsVerifying(false)
-            triggerGhostCursor(hint)
+            triggerGhostCursor(hint, { allowAutoClick: true, forceAutoClickMode: forceAutoClick })
             return
           }
         } else {
@@ -378,7 +401,7 @@ export default function OverlayPage() {
         if (payload.screenshotData) {
           const hint = await analyzeScreen(payload.screenshotData, demoStep, activeSteps[demoStep].instruction, activeSteps[demoStep].expected)
           setIdleHint(hint)
-          triggerGhostCursor(hint)
+          triggerGhostCursor(hint, { allowAutoClick: true, forceAutoClickMode: forceAutoClick })
         }
         setIsAnalysing(false)
       })
@@ -396,18 +419,10 @@ export default function OverlayPage() {
     }, 20_000)
     idleCleanupRef.current = () => clearTimeout(timer)
     return () => clearTimeout(timer)
-  }, [demoMode, demoStep]) // eslint-disable-line
-
-  // ── Backend session ──────────────────────────────────────────────────────
-  const handleBackendStart = async () => {
-    if (!query.trim()) return
-    setBackendStarted(true)
-    try { await session.start('demo-user', 'freightos', query) }
-    catch { setBackendStarted(false) }
-  }
+  }, [demoMode, demoStep, forceAutoClick]) // eslint-disable-line
 
   const handleBackendStop = async () => {
-    await session.stop(); setBackendStarted(false); setQuery('')
+    await session.stop(); setBackendStarted(false)
   }
 
   useEffect(() => {
@@ -485,6 +500,39 @@ export default function OverlayPage() {
       : { position: 'fixed' as const, top: 28, left: '50%', transform: 'translateX(-50%)' }
 
   const activeHint = verifyHint || idleHint
+
+  const forceClickCurrentTarget = useCallback(async () => {
+    if (!electronAPI?.captureScreen) return
+
+    // If we already have a target, click immediately.
+    if (activeHint?.target_x != null && activeHint.target_y != null) {
+      triggerGhostCursor(activeHint, { allowAutoClick: true, forceAutoClickMode: true })
+      return
+    }
+
+    const instructionText = demoMode
+      ? activeSteps[demoStep]?.instruction
+      : backendStep?.instruction_text
+    if (!instructionText) return
+
+    const expectedScreen = demoMode ? activeSteps[demoStep]?.expected : undefined
+    setIsVerifying(true)
+    try {
+      const result = await electronAPI.captureScreen()
+      if (!result?.ok) return
+      const hint = await analyzeScreen(
+        result.data,
+        demoMode ? demoStep : (backendStep?.step_index ?? 0),
+        instructionText,
+        expectedScreen,
+      )
+      if (!hint) return
+      setVerifyHint(hint)
+      triggerGhostCursor(hint, { allowAutoClick: true, forceAutoClickMode: true })
+    } finally {
+      setIsVerifying(false)
+    }
+  }, [activeHint, activeSteps, backendStep, demoMode, demoStep])
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -624,7 +672,7 @@ export default function OverlayPage() {
             {/* Backend nav */}
             {backendStarted && backendStep && (
               <button
-                onClick={() => session.advance?.()}
+                onClick={() => session.sendVoiceCommand('next step')}
                 className="flex items-center gap-1 h-7 px-3 rounded-lg
                            bg-white/8 hover:bg-white/12 border border-white/8
                            text-[12px] text-white/70 hover:text-white transition-all"
@@ -647,17 +695,22 @@ export default function OverlayPage() {
         </div>
 
         {/* ── Expanded content ─────────────────────────────────────────────── */}
-        <AnimatePresence initial={false}>
-          {(demoMode || backendStarted || sopPickerOpen) && (
-            <motion.div
-              key="content"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 34 }}
-              className="overflow-hidden"
+        {/* CSS grid-rows trick: no inline height style → ResizeObserver always fires */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateRows: (demoMode || backendStarted || sopPickerOpen) ? '1fr' : '0fr',
+            transition: 'grid-template-rows 260ms cubic-bezier(0.4,0,0.2,1)',
+          }}
+        >
+          <div className="overflow-hidden">
+            <div
+              className="border-t border-white/[0.06] px-4 py-3 space-y-3"
+              style={{
+                opacity: (demoMode || backendStarted || sopPickerOpen) ? 1 : 0,
+                transition: 'opacity 200ms ease',
+              }}
             >
-              <div className="border-t border-white/[0.06] px-4 py-3 space-y-3">
 
                 {/* ── SOP picker ─────────────────────────────────────────── */}
                 {sopPickerOpen && !demoMode && (
@@ -906,6 +959,28 @@ export default function OverlayPage() {
                   </div>
                 )}
 
+                {(demoMode || backendStarted) && inElectron && (
+                  <div className="flex items-center justify-between gap-2 rounded-lg border border-white/8 bg-white/3 px-3 py-2">
+                    <button
+                      onClick={() => setForceAutoClick((v) => !v)}
+                      className={`text-[11px] px-2 py-1 rounded-md transition-colors ${
+                        forceAutoClick
+                          ? 'bg-amber-400/20 text-amber-300'
+                          : 'bg-white/6 text-white/45 hover:text-white/70'
+                      }`}
+                    >
+                      Force auto-click: {forceAutoClick ? 'ON' : 'OFF'}
+                    </button>
+                    <button
+                      onClick={forceClickCurrentTarget}
+                      disabled={isVerifying || isAnalysing}
+                      className="text-[11px] px-2 py-1 rounded-md bg-white/8 text-white/70 hover:bg-white/12 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                    >
+                      Click target now
+                    </button>
+                  </div>
+                )}
+
                 {/* Hint panel (verify / idle) */}
                 <AnimatePresence>
                   {isVerifying && (
@@ -991,9 +1066,8 @@ export default function OverlayPage() {
                   <p className="text-[12px] text-red-400/70">{session.error}</p>
                 )}
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            </div>
+          </div>
 
         {/* ── Idle state — no session ──────────────────────────────────────── */}
         {!demoMode && !backendStarted && (

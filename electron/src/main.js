@@ -5,8 +5,10 @@ const {
 const path = require('path')
 const https = require('https')
 const http  = require('http')
+const { execFile } = require('child_process')
 
 const isDev = process.env.ELECTRON_DEV === 'true'
+const ENABLE_GHOST_AUTOMATION = process.env.GHOST_AUTOMATION === 'true'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const WIDGET_WIDTH  = 700
@@ -58,6 +60,55 @@ async function captureScreen() {
   return buf.toString('base64')
 }
 
+function mapGhostTargetToScreen(targetX, targetY, normalized = false) {
+  // Use the display nearest to the user's current cursor so ghost clicks can
+  // target apps on any monitor, not just the primary display.
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const bounds = display?.bounds || { x: 0, y: 0, width: 1920, height: 1080 }
+  const nX = Number(targetX)
+  const nY = Number(targetY)
+  if (!Number.isFinite(nX) || !Number.isFinite(nY)) {
+    return {
+      x: Math.round(bounds.x + (bounds.width / 2)),
+      y: Math.round(bounds.y + (bounds.height / 2)),
+    }
+  }
+  if (normalized) {
+    const fx = Math.max(0, Math.min(1, nX))
+    const fy = Math.max(0, Math.min(1, nY))
+    return {
+      x: Math.round(bounds.x + (fx * bounds.width)),
+      y: Math.round(bounds.y + (fy * bounds.height)),
+    }
+  }
+  return {
+    x: Math.round(nX),
+    y: Math.round(nY),
+  }
+}
+
+function autoClickAt(x, y, force = false) {
+  if (!ENABLE_GHOST_AUTOMATION && !force) return
+  if (process.platform !== 'win32') return
+  const script = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeMouse {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+}
+"@;
+[NativeMouse]::SetCursorPos(${x}, ${y}) | Out-Null;
+Start-Sleep -Milliseconds 70;
+[NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero);
+[NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero);
+`
+  execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], (err) => {
+    if (err) console.warn('[ghost] auto-click failed:', err.message)
+  })
+}
+
 // ── Create overlay window ─────────────────────────────────────────────────────
 function createWindow() {
   const { width: sw } = screen.getPrimaryDisplay().workAreaSize
@@ -73,6 +124,7 @@ function createWindow() {
     frame:              false,
     transparent:        true,
     hasShadow:          true,
+    backgroundColor:    '#00000000',
     vibrancy:           'under-window',
     visualEffectState:  'active',
     skipTaskbar:        false,
@@ -94,7 +146,8 @@ function createWindow() {
 
   if (isDev) {
     win.loadURL('http://localhost:5173/overlay')
-    if (isDev) win.webContents.openDevTools({ mode: 'detach' })
+    // Uncomment the line below to open DevTools for debugging:
+    // win.webContents.openDevTools({ mode: 'detach' })
   } else {
     win.loadFile(path.join(__dirname, '../frontend/dist/index.html'), {
       hash: '/overlay',
@@ -113,8 +166,8 @@ let ghostHideTimer = null
 function createGhostWindow() {
   // Small window — just big enough for the cursor SVG + pulse rings
   ghostWin = new BrowserWindow({
-    width:           80,
-    height:          80,
+    width:           160,
+    height:          160,
     x:               0,
     y:               0,
     transparent:     true,
@@ -171,7 +224,7 @@ app.whenReady().then(() => {
     if (!win) return
     isCollapsed = !isCollapsed
     const targetH = isCollapsed ? COLLAPSED_H : WIDGET_HEIGHT
-    win.setSize(WIDGET_WIDTH, targetH, true)
+    win.setSize(WIDGET_WIDTH, targetH)
     return isCollapsed
   })
 
@@ -184,7 +237,7 @@ app.whenReady().then(() => {
     } else {
       targetH = expandedOrHeight ? WIDGET_HEIGHT : COLLAPSED_H
     }
-    win.setSize(WIDGET_WIDTH, targetH, true)
+    win.setSize(WIDGET_WIDTH, targetH)
   })
 
   ipcMain.handle('set-ignore-mouse', (_, ignore) => {
@@ -260,15 +313,19 @@ app.whenReady().then(() => {
   })
 
   // ── IPC: ghost cursor ─────────────────────────────────────────────────────
-  ipcMain.handle('show-ghost-cursor', (_, { x, y }) => {
+  ipcMain.handle('show-ghost-cursor', (_, payload) => {
+    const { x, y } = mapGhostTargetToScreen(payload?.x, payload?.y, Boolean(payload?.normalized))
+    const shouldAutoClick = Boolean(payload?.autoClick)
+    const forceAutoClick = Boolean(payload?.forceAutoClick)
     if (!ghostWin) createGhostWindow()
     // Move the small window to the target position (cursor tip at x,y)
     const show = () => {
-      ghostWin?.setPosition(Math.round(x - 14), Math.round(y - 8), false)
-      ghostWin?.webContents.send('ghost-cursor-move', { x: 14, y: 8 })  // local coords inside small window
+      ghostWin?.setPosition(Math.round(x - 80), Math.round(y - 80), false)
+      ghostWin?.webContents.send('ghost-cursor-move', { x: 80, y: 80 })  // local coords: center of window
       ghostWin?.show()
+      if (shouldAutoClick) autoClickAt(x, y, forceAutoClick)
       if (ghostHideTimer) clearTimeout(ghostHideTimer)
-      ghostHideTimer = setTimeout(hideGhostCursor, 10000)
+      ghostHideTimer = setTimeout(hideGhostCursor, 3000)
     }
     if (ghostWin.webContents.isLoading()) {
       ghostWin.webContents.once('did-finish-load', show)

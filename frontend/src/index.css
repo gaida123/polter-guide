@@ -39,8 +39,8 @@ body.overlay-mode #root {
 
 /* Ghost cursor glow keyframe */
 @keyframes ghost-pulse {
-  0%, 100% { filter: drop-shadow(0 0 6px #6366f1) drop-shadow(0 0 12px #6366f1aa); }
-  50%       { filter: drop-shadow(0 0 12px #818cf8) drop-shadow(0 0 24px #6366f188); }
+  0%, 100% { filter: drop-shadow(0 0 8px #22d3ee) drop-shadow(0 0 16px #22d3eecc); }
+  50%       { filter: drop-shadow(0 0 16px #67e8f9) drop-shadow(0 0 30px #22d3eeaa); }
 }
 
 /* Target element highlight ring */

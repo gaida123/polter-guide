@@ -64,7 +64,7 @@ def _extract_text(response) -> str:
     return "".join(parts).strip()
 
 
-_THINKING_OFF = types.ThinkingConfig(thinking_budget=0)
+_THINKING_OFF = types.ThinkingConfig(include_thoughts=False)
 
 
 async def _call_vision(prompt: str, image_base64: str) -> str:

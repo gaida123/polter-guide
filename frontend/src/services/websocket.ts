@@ -16,7 +16,7 @@ export class HandOffWebSocket {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const url = `ws://localhost:8000/ws/${this.sessionId}`
+      const url = `ws://localhost:8080/ws/${this.sessionId}`
       this.ws = new WebSocket(url)
 
       this.ws.onopen = () => {
