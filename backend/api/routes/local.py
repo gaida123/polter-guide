@@ -20,11 +20,11 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
 import local_db
-from services.gemini_service import generate_steps_from_description
+from services.gemini_service import generate_steps_from_description, generate_steps_from_file
 
 router  = APIRouter(prefix="/local", tags=["Local"])
 logger  = logging.getLogger(__name__)
@@ -68,6 +68,69 @@ async def generate_sop(body: GenerateRequest):
     steps = await generate_steps_from_description(body.description)
     if not steps:
         raise HTTPException(status_code=500, detail="AI failed to generate steps")
+    return [SopStep(**s) for s in steps]
+
+
+_SUPPORTED_TYPES = {
+    "application/pdf":  "application/pdf",
+    "text/plain":       "text/plain",
+    "image/png":        "image/png",
+    "image/jpeg":       "image/jpeg",
+    "image/jpg":        "image/jpeg",
+    "image/webp":       "image/webp",
+    # DOCX is handled by extracting text first
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/msword": "docx",
+}
+
+
+@router.post("/sops/upload", response_model=list[SopStep])
+async def upload_sop_file(file: UploadFile = File(...)):
+    """
+    Upload a PDF, Word doc, plain-text file, or image of an SOP.
+    Gemini analyses the content and returns structured onboarding steps.
+    """
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    mime = _SUPPORTED_TYPES.get(content_type)
+    if mime is None:
+        # Try by extension
+        name = (file.filename or "").lower()
+        if name.endswith(".pdf"):   mime = "application/pdf"
+        elif name.endswith(".txt"): mime = "text/plain"
+        elif name.endswith(".png"): mime = "image/png"
+        elif name.endswith(".jpg") or name.endswith(".jpeg"): mime = "image/jpeg"
+        elif name.endswith(".webp"): mime = "image/webp"
+        elif name.endswith(".docx"): mime = "docx"
+        else:
+            raise HTTPException(
+                status_code=415,
+                detail="Unsupported file type. Please upload a PDF, Word (.docx), plain-text, or image file."
+            )
+
+    raw_bytes = await file.read()
+    if len(raw_bytes) > 20 * 1024 * 1024:  # 20 MB cap
+        raise HTTPException(status_code=413, detail="File too large (max 20 MB)")
+
+    # Extract text from DOCX
+    if mime == "docx":
+        try:
+            import io
+            from docx import Document  # type: ignore
+            doc = Document(io.BytesIO(raw_bytes))
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            raw_bytes = text.encode("utf-8")
+            mime = "text/plain"
+        except ImportError:
+            raise HTTPException(
+                status_code=422,
+                detail="python-docx not installed. Upload a PDF or plain-text file instead."
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Could not read Word file: {exc}")
+
+    steps = await generate_steps_from_file(raw_bytes, mime)
+    if not steps:
+        raise HTTPException(status_code=500, detail="AI could not extract steps from the file. Try a clearer document.")
     return [SopStep(**s) for s in steps]
 
 

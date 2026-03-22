@@ -339,6 +339,86 @@ async def generate_steps_from_description(description: str) -> list[dict]:
         return []
 
 
+# ── SOP generation from uploaded document / image ─────────────────────────────
+
+_FILE_SOP_PROMPT = """\
+You are an expert onboarding designer. Analyse the attached document (which may be a PDF, Word document, text file, or screenshot of an SOP).
+
+Extract the onboarding steps described in the document and convert them into a structured step list that a new employee can follow with guided screen assistance.
+
+Rules:
+- Each step must be a single, atomic action (one click, one navigation, one form field, etc.).
+- Each step has three fields:
+    title       — 3-5 word summary of the action
+    instruction — friendly, second-person instruction (max 25 words), e.g. "Click the blue Sign In button in the top-right corner."
+    expected    — precise description of what the screen must show AFTER the step is done, including the URL/app name and the key visible element (e.g. "Google accounts page at accounts.google.com showing an email input field and a Next button").
+- If the document contains vague or high-level phases (e.g. "Set up email"), break them into concrete sub-steps.
+- Aim for 4-12 steps total.
+- Ignore any headers, footers, logos, or page numbers — focus only on instructional content.
+
+Return a JSON array only — no markdown, no explanation:
+[
+  {{
+    "title": "<3-5 word title>",
+    "instruction": "<friendly instruction, max 25 words>",
+    "expected": "<precise URL/app + UI element description for verification>"
+  }}
+]
+"""
+
+
+async def generate_steps_from_file(file_bytes: bytes, mime_type: str) -> list[dict]:
+    """
+    Generate SOP steps from an uploaded document or image.
+    Supports: application/pdf, text/plain, image/png, image/jpeg, image/webp.
+    For DOCX/other text formats, pass the extracted text as text/plain bytes.
+    """
+    image_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+
+    try:
+        response = await _client.aio.models.generate_content(
+            model=_MODEL,
+            contents=[_FILE_SOP_PROMPT, image_part],
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=4096,
+                response_mime_type="application/json",
+                thinking_config=_THINKING_OFF,
+            ),
+        )
+        raw = _extract_text(response)
+
+        # Robust JSON extraction
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            m = re.search(r'\[.*\]', raw, re.DOTALL)
+            if m:
+                parsed = json.loads(m.group())
+            else:
+                raise
+
+        if isinstance(parsed, dict):
+            for v in parsed.values():
+                if isinstance(v, list):
+                    parsed = v
+                    break
+
+        if isinstance(parsed, list):
+            return [
+                {
+                    "title":       s.get("title", f"Step {i+1}"),
+                    "instruction": s.get("instruction", ""),
+                    "expected":    s.get("expected", ""),
+                }
+                for i, s in enumerate(parsed)
+            ]
+        return []
+    except Exception as exc:
+        logger.error("File-based SOP generation failed: %s", exc)
+        return []
+
+
 # ── Screen analysis for step verification + idle hints ────────────────────────
 
 _ANALYZE_SCREEN_PROMPT = """\
