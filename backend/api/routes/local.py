@@ -25,7 +25,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
 import local_db
-from services.gemini_service import generate_steps_from_description, generate_steps_from_file
+from services.gemini_service import generate_steps_from_description, generate_steps_from_file, chat_with_step
 
 router  = APIRouter(prefix="/local", tags=["Local"])
 logger  = logging.getLogger(__name__)
@@ -241,6 +241,23 @@ async def finish_session(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
     await asyncio.to_thread(local_db.finish_session, session_id)
     return {"finished": True}
+
+
+@router.post("/chat")
+async def chat_step(body: dict):
+    """
+    Conversational assistant for a single SOP step.
+    Detects 'already done' intent and returns should_advance=true if so.
+    """
+    message     = str(body.get("message", "")).strip()
+    title       = str(body.get("step_title", ""))
+    instruction = str(body.get("step_instruction", ""))
+    step_num    = int(body.get("step_num", 1))
+    total_steps = int(body.get("total_steps", 1))
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    result = await chat_with_step(message, title, instruction, step_num, total_steps)
+    return result
 
 
 @router.post("/tts")

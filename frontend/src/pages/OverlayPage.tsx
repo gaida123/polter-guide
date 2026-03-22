@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Mic, MicOff, Volume2, Loader2, X, CheckCircle2,
   AlertTriangle, ChevronLeft, ChevronRight, Zap, BookOpen,
+  MessageCircle, Send,
 } from 'lucide-react'
 import { useSession } from '../hooks/useSession'
 import { useVoice } from '../hooks/useVoice'
@@ -144,6 +145,13 @@ export default function OverlayPage() {
   const [idleHint,    setIdleHint]    = useState<IdleHint | null>(null)
   const idleCleanupRef = useRef<(() => void) | null>(null)
   const widgetRef      = useRef<HTMLDivElement>(null)
+
+  // Chat assistant
+  const [chatOpen,    setChatOpen]    = useState(false)
+  const [chatInput,   setChatInput]   = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'ai'; text: string }[]>([])
+  const chatEndRef = useRef<HTMLDivElement>(null)
 
   // Backend session
   const session = useSession()
@@ -400,6 +408,49 @@ export default function OverlayPage() {
   const total       = session.totalSteps
   const progress    = backendStep ? ((backendStep.step_index + 1) / Math.max(total, 1)) * 100 : 0
 
+  // ── Chat ─────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages])
+
+  // Reset chat when step changes
+  useEffect(() => {
+    setChatMessages([])
+    setChatInput('')
+  }, [demoStep])
+
+  const sendChat = async () => {
+    const msg = chatInput.trim()
+    if (!msg || chatLoading) return
+    setChatInput('')
+    setChatMessages(prev => [...prev, { role: 'user', text: msg }])
+    setChatLoading(true)
+    try {
+      const step = activeSteps[demoStep]
+      const res  = await fetch(`${LOCAL_API}/local/chat`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message:          msg,
+          step_title:       step.title,
+          step_instruction: step.instruction,
+          step_num:         demoStep + 1,
+          total_steps:      activeSteps.length,
+        }),
+      })
+      const data = await res.json()
+      setChatMessages(prev => [...prev, { role: 'ai', text: data.reply }])
+      speak(data.reply)
+      if (data.should_advance) {
+        setTimeout(() => doAdvanceStep(), 1200)
+      }
+    } catch {
+      setChatMessages(prev => [...prev, { role: 'ai', text: "Sorry, I couldn't reach the assistant. Please try again." }])
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
   // ── Dragging (web mode only) ─────────────────────────────────────────────
   const posRef = useRef({ startX: 0, startY: 0 })
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
@@ -508,6 +559,21 @@ export default function OverlayPage() {
                  : voiceState === 'speaking'  ? <Volume2 className="w-3 h-3" />
                  : voiceState === 'listening' ? <MicOff className="w-3 h-3" />
                  : <Mic className="w-3 h-3" />}
+              </button>
+            )}
+
+            {/* Chat toggle */}
+            {demoMode && !isComplete && (
+              <button
+                onClick={() => setChatOpen(o => !o)}
+                className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all
+                  ${chatOpen
+                    ? 'bg-white/15 text-white'
+                    : 'text-white/25 hover:text-white/60 hover:bg-white/5'
+                  }`}
+                title="Ask a question or say you've already done this"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
               </button>
             )}
 
@@ -683,6 +749,74 @@ export default function OverlayPage() {
                     {activeSteps[demoStep].instruction}
                   </p>
                 )}
+
+                {/* ── Chat panel ─────────────────────────────────────────── */}
+                <AnimatePresence>
+                  {demoMode && !isComplete && chatOpen && (
+                    <motion.div
+                      key="chat"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ type: 'spring', stiffness: 400, damping: 34 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="border border-white/[0.07] rounded-xl overflow-hidden">
+                        {/* Message history */}
+                        {chatMessages.length > 0 && (
+                          <div className="max-h-[160px] overflow-y-auto px-3 pt-3 space-y-2 scroll-smooth">
+                            {chatMessages.map((m, i) => (
+                              <div
+                                key={i}
+                                className={`flex gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                              >
+                                <div className={`max-w-[85%] px-2.5 py-1.5 rounded-xl text-[12px] leading-relaxed ${
+                                  m.role === 'user'
+                                    ? 'bg-white/10 text-white/80'
+                                    : 'bg-white/5 text-white/60'
+                                }`}>
+                                  {m.text}
+                                </div>
+                              </div>
+                            ))}
+                            {chatLoading && (
+                              <div className="flex gap-2 justify-start">
+                                <div className="px-2.5 py-1.5 rounded-xl bg-white/5">
+                                  <Loader2 className="w-3 h-3 text-white/30 animate-spin" />
+                                </div>
+                              </div>
+                            )}
+                            <div ref={chatEndRef} />
+                          </div>
+                        )}
+
+                        {/* Input row */}
+                        <div className="flex items-center gap-2 px-3 py-2">
+                          <input
+                            value={chatInput}
+                            onChange={e => setChatInput(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChat()}
+                            placeholder={chatMessages.length === 0
+                              ? 'Ask a question or say "I already did this"…'
+                              : 'Reply…'}
+                            disabled={chatLoading}
+                            className="flex-1 bg-transparent text-[12px] text-white/70 placeholder-white/20
+                                       focus:outline-none disabled:opacity-40"
+                          />
+                          <button
+                            onClick={sendChat}
+                            disabled={!chatInput.trim() || chatLoading}
+                            className="w-6 h-6 flex items-center justify-center rounded-lg
+                                       text-white/30 hover:text-white/70 hover:bg-white/8
+                                       disabled:opacity-20 disabled:pointer-events-none transition-all"
+                          >
+                            <Send className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 {/* Backend instruction */}
                 {backendStarted && backendStep && (

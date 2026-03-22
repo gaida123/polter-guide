@@ -557,3 +557,59 @@ async def analyze_screen_for_step(
             "target_y": None,
             "_error": str(exc),
         }
+
+
+# ── Step chat ─────────────────────────────────────────────────────────────────
+
+_CHAT_PROMPT = """\
+You are HandOff AI, a friendly and concise onboarding assistant.
+
+The employee is currently on this step ({step_num} of {total_steps}):
+Title: {title}
+Instruction: {instruction}
+
+The employee just said:
+"{message}"
+
+Your tasks:
+1. Decide if the employee is saying they already completed this step.
+   Phrases that mean "already done": "I already did this", "done this before",
+   "it was already set up", "I set this up", "already complete", "already finished",
+   "I did it already", "skip this", "I've done this".
+2. If yes → set "should_advance" to true and respond warmly confirming you'll move on.
+3. If they have a question → answer in 1-3 clear, friendly sentences.
+4. Keep replies short and human. No bullet points. No markdown.
+
+Return only valid JSON, no extra text:
+{{
+  "reply": "<your response>",
+  "should_advance": <true or false>
+}}
+"""
+
+
+async def chat_with_step(
+    message: str,
+    step_title: str,
+    step_instruction: str,
+    step_num: int,
+    total_steps: int,
+) -> dict:
+    prompt = _CHAT_PROMPT.format(
+        message=message,
+        title=step_title,
+        instruction=step_instruction,
+        step_num=step_num,
+        total_steps=total_steps,
+    )
+    try:
+        raw = await _call_text(prompt, max_tokens=200)
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        data = json.loads(m.group() if m else raw)
+        return {
+            "reply": str(data.get("reply", "Got it!")),
+            "should_advance": bool(data.get("should_advance", False)),
+        }
+    except Exception as exc:
+        logger.error("chat_with_step failed: %s", exc)
+        return {"reply": "Sorry, I had trouble understanding that. Could you rephrase?", "should_advance": False}
