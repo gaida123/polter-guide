@@ -143,6 +143,7 @@ export default function OverlayPage() {
   const [isAnalysing, setIsAnalysing] = useState(false)
   const [idleHint,    setIdleHint]    = useState<IdleHint | null>(null)
   const idleCleanupRef = useRef<(() => void) | null>(null)
+  const widgetRef      = useRef<HTMLDivElement>(null)
 
   // Backend session
   const session = useSession()
@@ -208,7 +209,6 @@ export default function OverlayPage() {
   }, [])
 
   // ── Tell Electron the exact pixel height of the widget ───────────────────
-  const widgetRef = useRef<HTMLDivElement>(null)
   const isExpanded = demoMode || backendStarted || sopPickerOpen
 
   // ResizeObserver fires automatically whenever the widget grows/shrinks,
