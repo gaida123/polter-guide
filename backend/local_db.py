@@ -32,14 +32,26 @@ def init_db() -> None:
             created_at  TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS sessions (
-            id             TEXT PRIMARY KEY,
-            sop_id         TEXT NOT NULL,
-            employee_name  TEXT NOT NULL,
-            employee_email TEXT,
-            started_at     TEXT NOT NULL,
-            completed_at   TEXT,
-            current_step   INTEGER NOT NULL DEFAULT 0,
-            step_results   TEXT NOT NULL DEFAULT '[]'
+            id               TEXT PRIMARY KEY,
+            sop_id           TEXT NOT NULL,
+            employee_name    TEXT NOT NULL,
+            employee_email   TEXT,
+            started_at       TEXT NOT NULL,
+            completed_at     TEXT,
+            current_step     INTEGER NOT NULL DEFAULT 0,
+            step_results     TEXT NOT NULL DEFAULT '[]',
+            report_generated INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS agent_feed (
+            id           TEXT PRIMARY KEY,
+            session_id   TEXT NOT NULL,
+            employee_name TEXT NOT NULL,
+            sop_title    TEXT NOT NULL,
+            summary      TEXT NOT NULL,
+            steps_done   INTEGER NOT NULL,
+            total_steps  INTEGER NOT NULL,
+            duration_s   REAL,
+            created_at   TEXT NOT NULL
         );
     """)
     conn.commit()
@@ -151,6 +163,52 @@ def finish_session(session_id: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def get_unprocessed_completions() -> list[dict]:
+    """Return completed sessions that the CompletionAgent hasn't processed yet."""
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT * FROM sessions WHERE completed_at IS NOT NULL AND report_generated=0"
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["step_results"] = json.loads(d["step_results"])
+        result.append(d)
+    return result
+
+
+def mark_session_processed(session_id: str) -> None:
+    conn = _conn()
+    conn.execute("UPDATE sessions SET report_generated=1 WHERE id=?", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+def save_feed_entry(entry: dict) -> None:
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO agent_feed (id,session_id,employee_name,sop_title,summary,"
+        "steps_done,total_steps,duration_s,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            entry["id"], entry["session_id"], entry["employee_name"],
+            entry["sop_title"], entry["summary"], entry["steps_done"],
+            entry["total_steps"], entry.get("duration_s"), entry["created_at"],
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_feed(limit: int = 30) -> list[dict]:
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT * FROM agent_feed ORDER BY created_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def list_sessions(sop_id: str | None = None) -> list[dict]:

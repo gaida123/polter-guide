@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, Trash2, Loader2, Sparkles, Copy, Check,
   ChevronDown, ChevronUp, Users, BookOpen, BarChart3,
-  CheckCircle2, Clock, AlertCircle, X, Upload, FileText,
+  CheckCircle2, Clock, AlertCircle, X, Upload, FileText, Zap,
 } from 'lucide-react'
 
 const API = 'http://localhost:8080'
@@ -18,13 +18,19 @@ interface Session {
   employee_email: string; started_at: string; completed_at: string | null
   current_step: number; step_results: { step_index: number; completed_at: string }[]
 }
+interface FeedEntry {
+  id: string; session_id: string; employee_name: string; sop_title: string
+  summary: string; steps_done: number; total_steps: number
+  duration_s: number | null; created_at: string
+}
 
 const ROLES = ['General', 'Engineer', 'Designer', 'Sales', 'Marketing', 'HR', 'Finance', 'Intern']
 
 export default function AdminDashboard() {
   const [sops, setSops]             = useState<Sop[]>([])
   const [sessions, setSessions]     = useState<Session[]>([])
-  const [tab, setTab]               = useState<'sops' | 'sessions'>('sops')
+  const [feed, setFeed]             = useState<FeedEntry[]>([])
+  const [tab, setTab]               = useState<'sops' | 'sessions' | 'feed'>('sops')
   const [showCreate, setShowCreate] = useState(false)
   const [expandedSop, setExpandedSop] = useState<string | null>(null)
   const [copiedId, setCopiedId]     = useState<string | null>(null)
@@ -46,16 +52,26 @@ export default function AdminDashboard() {
 
   const load = async () => {
     setLoading(true)
-    const [sopRes, sessionRes] = await Promise.all([
+    const [sopRes, sessionRes, feedRes] = await Promise.all([
       fetch(`${API}/local/sops`).then(r => r.json()).catch(() => []),
       fetch(`${API}/local/sessions`).then(r => r.json()).catch(() => []),
+      fetch(`${API}/local/feed`).then(r => r.json()).catch(() => []),
     ])
     setSops(sopRes)
     setSessions(sessionRes)
+    setFeed(feedRes)
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // Poll the agent feed every 10s so new reports appear automatically
+    const interval = setInterval(async () => {
+      const feedRes = await fetch(`${API}/local/feed`).then(r => r.json()).catch(() => [])
+      setFeed(feedRes)
+    }, 10_000)
+    return () => clearInterval(interval)
+  }, [])
 
   const handleGenerate = async () => {
     setGenerating(true)
@@ -199,15 +215,21 @@ export default function AdminDashboard() {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-6 bg-white/4 rounded-lg p-1 w-fit">
-          {(['sops', 'sessions'] as const).map(t => (
+          {(['sops', 'sessions', 'feed'] as const).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize ${
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize flex items-center gap-1.5 ${
                 tab === t ? 'bg-white text-black' : 'text-white/50 hover:text-white'
               }`}
             >
-              {t === 'sops' ? 'SOPs' : 'Sessions'}
+              {t === 'feed' && <Zap className="w-3.5 h-3.5" />}
+              {t === 'sops' ? 'SOPs' : t === 'sessions' ? 'Sessions' : 'Agent Feed'}
+              {t === 'feed' && feed.length > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full ${tab === 'feed' ? 'bg-black/10' : 'bg-violet-500/60 text-white'}`}>
+                  {feed.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -304,7 +326,7 @@ export default function AdminDashboard() {
               </motion.div>
             ))}
           </div>
-        ) : (
+        ) : tab === 'sessions' ? (
           /* ── Sessions tab ── */
           <div className="space-y-3">
             {sessions.length === 0 ? (
@@ -357,6 +379,63 @@ export default function AdminDashboard() {
                       <Clock className="w-4 h-4 text-white/30" />
                     )}
                   </div>
+                </motion.div>
+              )
+            })}
+          </div>
+        ) : (
+          /* ── Agent Feed tab ── */
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 p-3 rounded-xl bg-violet-500/10 border border-violet-500/20 text-sm text-violet-300 mb-2">
+              <Zap className="w-4 h-4 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium text-violet-200">Powered by Fetch.ai CompletionAgent</p>
+                <p className="text-violet-300/70 text-xs mt-0.5">
+                  An autonomous uAgent scans for finished sessions every 10 seconds, generates an AI summary, and posts it here — no manual trigger needed.
+                </p>
+              </div>
+            </div>
+            {feed.length === 0 ? (
+              <div className="text-center py-20 border border-dashed border-white/10 rounded-2xl">
+                <Zap className="w-8 h-8 text-white/20 mx-auto mb-3" />
+                <p className="text-white/40">No completions yet — reports appear automatically when employees finish.</p>
+                <p className="text-white/20 text-sm mt-1">The Fetch.ai CompletionAgent checks every 10 seconds.</p>
+              </div>
+            ) : feed.map((entry, i) => {
+              const durStr = entry.duration_s != null
+                ? (entry.duration_s >= 60
+                    ? `${Math.floor(entry.duration_s / 60)}m ${Math.round(entry.duration_s % 60)}s`
+                    : `${Math.round(entry.duration_s)}s`)
+                : null
+              return (
+                <motion.div
+                  key={entry.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.04 }}
+                  className="p-4 rounded-xl border border-white/8 bg-white/4"
+                >
+                  <div className="flex items-start justify-between gap-4 mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-violet-500/20 flex items-center justify-center text-sm font-semibold text-violet-300 shrink-0">
+                        {entry.employee_name.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="font-medium">{entry.employee_name}</p>
+                        <p className="text-xs text-white/40">{entry.sop_title}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 text-xs text-white/40">
+                      {durStr && <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{durStr}</span>}
+                      <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-green-400" />{entry.steps_done}/{entry.total_steps} steps</span>
+                    </div>
+                  </div>
+                  <p className="text-sm text-white/70 leading-relaxed border-l-2 border-violet-500/40 pl-3">
+                    {entry.summary}
+                  </p>
+                  <p className="text-xs text-white/25 mt-2">
+                    Generated by CompletionAgent · {new Date(entry.created_at + 'Z').toLocaleString()}
+                  </p>
                 </motion.div>
               )
             })}

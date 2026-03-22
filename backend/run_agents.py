@@ -51,11 +51,12 @@ def _run_agent_thread(module_path: str, start_delay: float = 0.0):
 # ── Public runners ────────────────────────────────────────────────────────────
 
 def run_agents_in_background():
-    """Spawn all three agent threads as daemons (API stays in foreground)."""
+    """Spawn all agent threads as daemons (API stays in foreground)."""
     agent_modules = [
-        ("agents.context_agent",  0.0),
-        ("agents.knowledge_agent", 1.0),
-        ("agents.vision_agent",   2.0),
+        ("agents.context_agent",     0.0),
+        ("agents.knowledge_agent",   1.0),
+        ("agents.vision_agent",      2.0),
+        ("agents.completion_agent",  3.0),   # autonomous completion reporter
     ]
     for module_path, delay in agent_modules:
         t = threading.Thread(
@@ -70,9 +71,10 @@ def run_agents_in_background():
 def run_agents_blocking():
     """Run agents in the foreground (blocks until Ctrl-C)."""
     agent_modules = [
-        ("agents.context_agent",  0.0),
-        ("agents.knowledge_agent", 1.0),
-        ("agents.vision_agent",   2.0),
+        ("agents.context_agent",     0.0),
+        ("agents.knowledge_agent",   1.0),
+        ("agents.vision_agent",      2.0),
+        ("agents.completion_agent",  3.0),
     ]
     threads = []
     for module_path, delay in agent_modules:

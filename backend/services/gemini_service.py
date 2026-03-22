@@ -430,6 +430,57 @@ async def generate_steps_from_file(file_bytes: bytes, mime_type: str) -> list[di
         return []
 
 
+# ── Completion report generation (used by CompletionAgent) ───────────────────
+
+async def generate_completion_report(
+    employee_name: str,
+    sop_title: str,
+    steps_done: int,
+    total_steps: int,
+    duration_seconds: float | None,
+) -> str:
+    """Generate a short, human-readable onboarding completion summary."""
+    duration_str = ""
+    if duration_seconds is not None:
+        mins = int(duration_seconds // 60)
+        secs = int(duration_seconds % 60)
+        duration_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+
+    prompt = f"""\
+Write a single short paragraph (2-3 sentences) summarising an employee onboarding completion.
+Be professional, warm, and specific. Do NOT use bullet points or headers.
+
+Employee: {employee_name}
+Guide completed: {sop_title}
+Steps verified by AI: {steps_done} of {total_steps}
+Time taken: {duration_str or "unknown"}
+
+Example tone: "Alex Johnson successfully completed the Google Workspace Setup guide in 14 minutes, \
+with all 8 steps verified by AI vision. The session ran smoothly with no steps skipped. \
+Alex is now ready to use company tools."
+
+Return plain text only — no JSON, no markdown.
+"""
+    try:
+        response = await _client.aio.models.generate_content(
+            model=_FAST_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                max_output_tokens=200,
+                thinking_config=_THINKING_OFF,
+            ),
+        )
+        return _extract_text(response).strip()
+    except Exception as exc:
+        logger.error("Completion report generation failed: %s", exc)
+        return (
+            f"{employee_name} completed {sop_title} "
+            f"({steps_done}/{total_steps} steps verified)."
+            + (f" Duration: {duration_str}." if duration_str else "")
+        )
+
+
 # ── Screen analysis for step verification + idle hints ────────────────────────
 
 _ANALYZE_SCREEN_PROMPT = """\

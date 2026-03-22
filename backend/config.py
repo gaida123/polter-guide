@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     context_agent_seed: str = "context-agent-seed-replace-me"
     knowledge_agent_seed: str = "knowledge-agent-seed-replace-me"
     vision_agent_seed: str = "vision-agent-seed-replace-me"
+    completion_agent_seed: str = "handoff-completion-agent-seed-v1"
 
     context_agent_port: int = 8001
     knowledge_agent_port: int = 8002
     vision_agent_port: int = 8003
+    completion_agent_port: int = 8004
 
     @property
     def context_agent_endpoint(self) -> str:
