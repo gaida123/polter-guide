@@ -39,5 +39,8 @@ tenacity==8.5.0
 # Numeric (cosine similarity for semantic SOP search)
 numpy>=1.26.4
 
+# File upload support (required for multipart/form-data endpoints)
+python-multipart>=0.0.9
+
 # Logging
 structlog==24.4.0
