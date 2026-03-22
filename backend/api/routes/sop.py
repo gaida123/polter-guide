@@ -69,20 +69,12 @@ async def create_sop_endpoint(
     )
 
 
-@router.get("/{sop_id}", response_model=SopDocument)
-async def get_sop_endpoint(sop_id: str):
-    sop = await get_sop(sop_id)
-    if not sop:
-        raise HTTPException(status_code=404, detail=f"SOP '{sop_id}' not found")
-    return sop
-
-
 @router.get("", response_model=list[SopSummary])
 async def list_sops(product_id: str, published_only: bool = False):
     return await list_sops_for_product(product_id, published_only=published_only)
 
 
-# ── Semantic SOP search ───────────────────────────────────────────────────────
+# ── Semantic SOP search — must be registered BEFORE /{sop_id} ────────────────
 
 class SopSearchResult(SopSummary):
     similarity_score: float = 0.0
@@ -137,6 +129,14 @@ async def semantic_search_sops(
             results.append(SopSearchResult(**s.model_dump(), similarity_score=round(score, 4)))
 
     return results
+
+
+@router.get("/{sop_id}", response_model=SopDocument)
+async def get_sop_endpoint(sop_id: str):
+    sop = await get_sop(sop_id)
+    if not sop:
+        raise HTTPException(status_code=404, detail=f"SOP '{sop_id}' not found")
+    return sop
 
 
 @router.patch("/{sop_id}", response_model=dict)
