@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 
 
 class AnalyzeScreenRequest(BaseModel):
-    screenshot_base64: str = Field(..., description="Base64-encoded PNG screenshot")
-    step_index: int         = Field(..., description="0-based current SOP step index")
-    instruction_text: str   = Field(..., description="The instruction text for the current step")
+    screenshot_base64: str          = Field(..., description="Base64-encoded PNG screenshot")
+    step_index: int                  = Field(..., description="0-based current SOP step index")
+    instruction_text: str            = Field(..., description="The instruction text for the current step")
+    expected_screen: str | None      = Field(None, description="Description of the screen/app the user must be on")
 
 
 class AnalyzeScreenResponse(BaseModel):
@@ -27,6 +28,8 @@ class AnalyzeScreenResponse(BaseModel):
     hint:                str
     element_description: str | None
     confidence:          float
+    target_x:            float | None = None
+    target_y:            float | None = None
 
 
 @router.post("/analyze-screen", response_model=AnalyzeScreenResponse)
@@ -39,6 +42,7 @@ async def analyze_screen(body: AnalyzeScreenRequest):
         screenshot_base64=body.screenshot_base64,
         step_index=body.step_index,
         instruction_text=body.instruction_text,
+        expected_screen=body.expected_screen,
     )
     logger.info(
         "Screen analysis: step=%d confident=%.2f on_correct=%s",
@@ -49,4 +53,6 @@ async def analyze_screen(body: AnalyzeScreenRequest):
         hint=result.get("hint", ""),
         element_description=result.get("element_description"),
         confidence=result["confidence"],
+        target_x=result.get("target_x"),
+        target_y=result.get("target_y"),
     )

@@ -63,6 +63,9 @@ def _extract_text(response) -> str:
     return "".join(parts).strip()
 
 
+_THINKING_OFF = types.ThinkingConfig(thinking_budget=0)
+
+
 async def _call_vision(prompt: str, image_base64: str) -> str:
     raw_bytes  = _base64.b64decode(image_base64)
     image_part = types.Part.from_bytes(data=raw_bytes, mime_type="image/png")
@@ -72,8 +75,9 @@ async def _call_vision(prompt: str, image_base64: str) -> str:
         contents=[prompt, image_part],
         config=types.GenerateContentConfig(
             temperature=0.05,
-            max_output_tokens=1024,
+            max_output_tokens=2048,
             response_mime_type="application/json",
+            thinking_config=_THINKING_OFF,
         ),
     )
     return _extract_text(response)
@@ -87,6 +91,7 @@ async def _call_text(prompt: str, max_tokens: int = 256) -> str:
             temperature=0.0,
             max_output_tokens=max_tokens,
             response_mime_type="application/json",
+            thinking_config=_THINKING_OFF,
         ),
     )
     return _extract_text(response)
@@ -287,22 +292,33 @@ async def generate_sop_steps(events: list[dict]) -> list[dict]:
 # ── Screen analysis for step verification + idle hints ────────────────────────
 
 _ANALYZE_SCREEN_PROMPT = """\
-You are an AI co-pilot helping a user follow a step-by-step onboarding guide.
+You are a strict onboarding verification assistant. A user just clicked "Done" claiming they completed a step. Verify by carefully examining the screenshot.
 
-Current step the user SHOULD be performing:
-  Step {step_index}: "{instruction_text}"
+Step {step_index} they claimed to complete:
+  Task: "{instruction_text}"
+  Required screen: "{expected_screen}"
 
-Look at the screenshot and determine:
-1. Whether the user appears to be on the correct screen / app for this step.
-2. What they should click, type, or look for next — be specific (e.g. "Click the blue 'Sign In' button in the top-right corner").
-3. A confidence 0.0–1.0 that you can see the relevant UI.
+VERIFICATION RULES — read carefully:
+1. Look at the browser's address bar (URL bar) at the top of the Chrome/browser window. The URL must match the required screen. For example:
+   - "accounts.google.com" ≠ "workspace.google.com" ≠ "gmail.com" — these are DIFFERENT pages.
+   - "gmail.com" marketing page (shows "Create an account" / "Sign in" buttons) ≠ the actual sign-in form at accounts.google.com.
+2. Look at the main page content below the browser bar. The page must show the SPECIFIC elements described in the required screen (e.g. an email input field, a password field, etc.).
+3. There may be a small dark overlay widget at the top of the screen — IGNORE it entirely. Judge only the browser content behind it.
+4. on_correct_screen = TRUE only if BOTH the URL AND the visible page content clearly match the required screen.
+5. Be strict. If there is any doubt, set on_correct_screen to FALSE.
 
-Return JSON only:
+Also provide:
+- A short hint (max 20 words) telling the user what to do next to reach the required screen.
+- The fractional coordinates (0.0–1.0) of the next element the user needs to click.
+
+Return JSON only — no markdown:
 {{
   "on_correct_screen": <bool>,
   "hint": "<one concise sentence, max 20 words>",
-  "element_description": "<what the UI element looks like and where it is, or null>",
-  "confidence": <float 0.0-1.0>
+  "element_description": "<brief description of the element and its location>",
+  "confidence": <float 0.0-1.0>,
+  "target_x": <float 0.0-1.0 or null>,
+  "target_y": <float 0.0-1.0 or null>
 }}
 """
 
@@ -311,19 +327,32 @@ async def analyze_screen_for_step(
     screenshot_base64: str,
     step_index: int,
     instruction_text: str,
+    expected_screen: str | None = None,
 ) -> dict:
     prompt = _ANALYZE_SCREEN_PROMPT.format(
         step_index=step_index,
         instruction_text=instruction_text,
+        expected_screen=expected_screen or instruction_text,
     )
     try:
         raw  = await _call_vision(prompt, screenshot_base64)
-        data = json.loads(raw)
+        # Robust parse: try direct, then extract first {...} block
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            m = re.search(r'\{.*\}', raw, re.DOTALL)
+            if not m:
+                raise
+            data = json.loads(m.group())
+        tx = data.get("target_x")
+        ty = data.get("target_y")
         return {
             "on_correct_screen":   bool(data.get("on_correct_screen", False)),
             "hint":                data.get("hint", ""),
             "element_description": data.get("element_description"),
             "confidence":          _clamp(float(data.get("confidence", 0.0))),
+            "target_x":            _clamp(float(tx)) if tx is not None else None,
+            "target_y":            _clamp(float(ty)) if ty is not None else None,
         }
     except Exception as exc:
         logger.error("Screen analysis failed: %s", exc)
@@ -332,5 +361,7 @@ async def analyze_screen_for_step(
             "hint": "",
             "element_description": None,
             "confidence": 0.0,
+            "target_x": None,
+            "target_y": None,
             "_error": str(exc),
         }

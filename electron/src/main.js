@@ -18,6 +18,7 @@ const MARGIN_TOP    = 28
 const IDLE_TIMEOUT_MS = 20_000
 
 let win          = null
+let ghostWin     = null
 let isCollapsed  = false
 let idleTimer    = null
 let currentStepIndex = -1   // -1 = not started
@@ -106,6 +107,51 @@ function createWindow() {
   })
 }
 
+// ── Ghost cursor overlay window ───────────────────────────────────────────────
+let ghostHideTimer = null
+
+function createGhostWindow() {
+  // Small window — just big enough for the cursor SVG + pulse rings
+  ghostWin = new BrowserWindow({
+    width:           80,
+    height:          80,
+    x:               0,
+    y:               0,
+    transparent:     true,
+    frame:           false,
+    alwaysOnTop:     true,
+    skipTaskbar:     true,
+    focusable:       false,
+    resizable:       false,
+    show:            false,
+    hasShadow:       false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload:          path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration:  false,
+    },
+  })
+  ghostWin.setIgnoreMouseEvents(true, { forward: true })
+  ghostWin.setAlwaysOnTop(true, 'screen-saver', 2)
+  ghostWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+
+  if (isDev) {
+    ghostWin.loadURL('http://localhost:5173/ghost-cursor')
+  } else {
+    ghostWin.loadFile(path.join(__dirname, '../frontend/dist/index.html'), { hash: '/ghost-cursor' })
+  }
+
+  ghostWin.on('closed', () => { ghostWin = null })
+}
+
+function hideGhostCursor() {
+  if (ghostHideTimer) { clearTimeout(ghostHideTimer); ghostHideTimer = null }
+  if (!ghostWin) return
+  ghostWin.webContents.send('ghost-cursor-move', { x: -1, y: -1 })
+  setTimeout(() => ghostWin?.hide(), 400)
+}
+
 // ── App ready ─────────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
   createWindow()
@@ -140,6 +186,7 @@ app.whenReady().then(() => {
   ipcMain.handle('session-ended', () => {
     currentStepIndex = -1
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
+    hideGhostCursor()
   })
 
   // ── IPC: explicit screen capture ─────────────────────────────────────────
@@ -153,11 +200,12 @@ app.whenReady().then(() => {
 
   // ── IPC: analyze-screen proxied through main process ─────────────────────
   // Renderer network service can crash; main process Node http is stable.
-  ipcMain.handle('analyze-screen', async (_, { screenshotBase64, stepIndex, instructionText }) => {
+  ipcMain.handle('analyze-screen', async (_, { screenshotBase64, stepIndex, instructionText, expectedScreen }) => {
     const body = JSON.stringify({
       screenshot_base64: screenshotBase64,
       step_index:        stepIndex,
       instruction_text:  instructionText,
+      expected_screen:   expectedScreen || null,
     })
     return new Promise((resolve) => {
       const req = http.request({
@@ -181,6 +229,26 @@ app.whenReady().then(() => {
       req.end()
     })
   })
+
+  // ── IPC: ghost cursor ─────────────────────────────────────────────────────
+  ipcMain.handle('show-ghost-cursor', (_, { x, y }) => {
+    if (!ghostWin) createGhostWindow()
+    // Move the small window to the target position (cursor tip at x,y)
+    const show = () => {
+      ghostWin?.setPosition(Math.round(x - 14), Math.round(y - 8), false)
+      ghostWin?.webContents.send('ghost-cursor-move', { x: 14, y: 8 })  // local coords inside small window
+      ghostWin?.show()
+      if (ghostHideTimer) clearTimeout(ghostHideTimer)
+      ghostHideTimer = setTimeout(hideGhostCursor, 10000)
+    }
+    if (ghostWin.webContents.isLoading()) {
+      ghostWin.webContents.once('did-finish-load', show)
+    } else {
+      show()
+    }
+  })
+
+  ipcMain.handle('hide-ghost-cursor', hideGhostCursor)
 
   // ── Global shortcut: Cmd+Shift+H ─────────────────────────────────────────
   globalShortcut.register('CommandOrControl+Shift+H', () => {

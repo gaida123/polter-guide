@@ -9,10 +9,12 @@ import { useVoice } from '../hooks/useVoice'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface IdleHint {
-  on_correct_screen: boolean
-  hint:              string
+  on_correct_screen:   boolean
+  hint:                string
   element_description: string | null
-  confidence: number
+  confidence:          number
+  target_x?:           number | null
+  target_y?:           number | null
 }
 
 // ── Detect Electron ───────────────────────────────────────────────────────────
@@ -24,42 +26,42 @@ const DEMO_STEPS = [
   {
     title:       'Open Gmail',
     instruction: 'Go to gmail.com in your browser and click "Sign in" in the top-right corner.',
-    expected:    'Gmail sign-in page',
+    expected:    'A browser showing gmail.com or workspace.google.com with a visible "Sign in" button in the top-right corner',
   },
   {
     title:       'Enter your email',
     instruction: 'Type your new Google Workspace email address (e.g. you@yourcompany.com) and click "Next".',
-    expected:    'Google account email field',
+    expected:    'Google accounts sign-in page at accounts.google.com showing an email address text input field and a "Next" button',
   },
   {
     title:       'Enter your password',
     instruction: 'Type your temporary password provided by your IT admin, then click "Next".',
-    expected:    'Google password field',
+    expected:    'Google accounts page at accounts.google.com showing a password input field (not the email field)',
   },
   {
     title:       'Accept terms',
     instruction: 'Review the Google Workspace Terms of Service. Click "I agree" to continue.',
-    expected:    'Google Terms of Service page',
+    expected:    'Google Terms of Service or Welcome page with an "I agree" or "Accept" button',
   },
   {
     title:       'Set a new password',
     instruction: 'Create a strong password — at least 12 characters with letters, numbers and symbols. Confirm it and click "Change password".',
-    expected:    'Change password screen',
+    expected:    'Google page asking to create or change a password with two password input fields',
   },
   {
     title:       'Enable 2-Step Verification',
     instruction: 'Go to myaccount.google.com → Security → 2-Step Verification. Click "Get started" and follow the prompts.',
-    expected:    'Google Account Security page',
+    expected:    'Google Account security page at myaccount.google.com showing 2-Step Verification settings',
   },
   {
     title:       'Add a recovery email',
     instruction: 'Still in Security, click "Recovery email" and add a personal email for account recovery.',
-    expected:    'Recovery email field',
+    expected:    'Google Account page showing a recovery email input field or the recovery email settings section',
   },
   {
     title:       'Explore Google Drive',
     instruction: 'Navigate to drive.google.com. Click "+ New" and create a test document to confirm your account works.',
-    expected:    'Google Drive homepage',
+    expected:    'Google Drive at drive.google.com showing the main Drive interface with a "+ New" button',
   },
 ]
 
@@ -68,13 +70,14 @@ async function analyzeScreen(
   screenshotBase64: string,
   stepIndex: number,
   instructionText: string,
+  expectedScreen?: string,
 ): Promise<IdleHint | null> {
   if (electronAPI?.analyzeScreen) {
     try {
-      const result = await electronAPI.analyzeScreen({ screenshotBase64, stepIndex, instructionText })
+      const result = await electronAPI.analyzeScreen({ screenshotBase64, stepIndex, instructionText, expectedScreen })
       if (result?.ok) return result.data as IdleHint
       return null
-    } catch { return null }
+    } catch (_e) { return null }
   }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 6000)
@@ -82,13 +85,29 @@ async function analyzeScreen(
     const res = await fetch('http://localhost:8080/vision/analyze-screen', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ screenshot_base64: screenshotBase64, step_index: stepIndex, instruction_text: instructionText }),
+      body: JSON.stringify({ screenshot_base64: screenshotBase64, step_index: stepIndex, instruction_text: instructionText, expected_screen: expectedScreen }),
       signal: controller.signal,
     })
     if (!res.ok) return null
     return await res.json() as IdleHint
-  } catch { return null }
+  } catch (_e) { return null }
   finally { clearTimeout(timeout) }
+}
+
+// ── Ghost cursor helper ───────────────────────────────────────────────────────
+function triggerGhostCursor(hint: IdleHint | null) {
+  if (!electronAPI?.showGhostCursor) return
+  if (hint && hint.target_x != null && hint.target_y != null) {
+    // Convert fractional → screen pixels using the real screen size from Electron
+    const sw = window.screen.width  * window.devicePixelRatio
+    const sh = window.screen.height * window.devicePixelRatio
+    electronAPI.showGhostCursor({
+      x: Math.round(hint.target_x * sw / window.devicePixelRatio),
+      y: Math.round(hint.target_y * sh / window.devicePixelRatio),
+    })
+  } else {
+    electronAPI.hideGhostCursor()
+  }
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -158,6 +177,7 @@ export default function OverlayPage() {
     setQuery('')
     setIdleHint(null)
     setVerifyHint(null)
+    electronAPI?.hideGhostCursor?.()
     if (electronAPI) { electronAPI.sessionEnded(); electronAPI.offIdleAlert?.() }
     idleCleanupRef.current?.()
   }
@@ -165,6 +185,7 @@ export default function OverlayPage() {
   const doAdvanceStep = () => {
     setVerifyHint(null)
     setIdleHint(null)
+    electronAPI?.hideGhostCursor?.()
     setDemoChecked(prev => { const n = [...prev]; n[demoStep] = true; return n })
     setDemoStep(prev => {
       const next = Math.min(prev + 1, DEMO_STEPS.length - 1)
@@ -181,7 +202,7 @@ export default function OverlayPage() {
       try {
         const result = await electronAPI.captureScreen()
         if (result?.ok) {
-          const hint = await analyzeScreen(result.data, demoStep, DEMO_STEPS[demoStep].instruction)
+          const hint = await analyzeScreen(result.data, demoStep, DEMO_STEPS[demoStep].instruction, DEMO_STEPS[demoStep].expected)
           if (hint === null || hint.confidence === 0) {
             setVerifyHint({
               on_correct_screen: false,
@@ -195,6 +216,7 @@ export default function OverlayPage() {
           if (!hint.on_correct_screen) {
             setVerifyHint(hint)
             setIsVerifying(false)
+            triggerGhostCursor(hint)
             return
           }
         } else {
@@ -207,7 +229,7 @@ export default function OverlayPage() {
           setIsVerifying(false)
           return
         }
-      } catch { /* proceed */ }
+      } catch (_err) { /* proceed */ }
       setIsVerifying(false)
     }
     doAdvanceStep()
@@ -233,8 +255,9 @@ export default function OverlayPage() {
         if (payload.stepIndex !== demoStep) return
         setIsAnalysing(true); setIdleHint(null)
         if (payload.screenshotData) {
-          const hint = await analyzeScreen(payload.screenshotData, demoStep, DEMO_STEPS[demoStep].instruction)
+          const hint = await analyzeScreen(payload.screenshotData, demoStep, DEMO_STEPS[demoStep].instruction, DEMO_STEPS[demoStep].expected)
           setIdleHint(hint)
+          triggerGhostCursor(hint)
         }
         setIsAnalysing(false)
       })
@@ -245,7 +268,7 @@ export default function OverlayPage() {
       setIsAnalysing(true); setIdleHint(null)
       const result = await electronAPI.captureScreen()
       if (result?.ok) {
-        const hint = await analyzeScreen(result.data, demoStep, DEMO_STEPS[demoStep].instruction)
+        const hint = await analyzeScreen(result.data, demoStep, DEMO_STEPS[demoStep].instruction, DEMO_STEPS[demoStep].expected)
         setIdleHint(hint)
       }
       setIsAnalysing(false)

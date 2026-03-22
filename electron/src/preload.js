@@ -18,10 +18,14 @@ contextBridge.exposeInMainWorld('handoff', {
   analyzeScreen:   (payload)  => ipcRenderer.invoke('analyze-screen', payload),
 
   // Idle alerts pushed from main → renderer
-  onIdleAlert:     (cb) => {
-    ipcRenderer.on('idle-alert', (_, payload) => cb(payload))
-  },
-  offIdleAlert:    ()   => {
-    ipcRenderer.removeAllListeners('idle-alert')
-  },
+  onIdleAlert:     (cb) => { ipcRenderer.on('idle-alert', (_, payload) => cb(payload)) },
+  offIdleAlert:    ()   => { ipcRenderer.removeAllListeners('idle-alert') },
+
+  // Ghost cursor control (called from overlay window)
+  showGhostCursor: (payload) => ipcRenderer.invoke('show-ghost-cursor', payload),
+  hideGhostCursor: ()        => ipcRenderer.invoke('hide-ghost-cursor'),
+
+  // Ghost cursor position events (received in ghost-cursor window)
+  onGhostCursor:   (cb) => { ipcRenderer.on('ghost-cursor-move', (_, payload) => cb(payload)) },
+  offGhostCursor:  ()   => { ipcRenderer.removeAllListeners('ghost-cursor-move') },
 })
