@@ -1,41 +1,50 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mic, MicOff, Volume2, Loader2 } from 'lucide-react'
 import { useVoice } from '../../hooks/useVoice'
-import { useEffect } from 'react'
+import { useEffect, useCallback } from 'react'
 import type { VoiceState } from '../../types'
 
 interface VoiceInterfaceProps {
   onCommand: (text: string) => void
-  /** Called when TTS should speak a string (passed in from parent session logic) */
+  /** New step instruction to speak aloud via TTS */
   speakText?: string
   disabled?: boolean
 }
 
 const STATE_LABEL: Record<VoiceState, string> = {
   idle:       'Say "next step" or click to speak',
-  listening:  'Listening...',
-  processing: 'Processing...',
-  speaking:   'Speaking...',
+  listening:  'Listening…',
+  processing: 'Processing your command…',
+  speaking:   'Speaking…',
 }
 
 const STATE_COLOR: Record<VoiceState, string> = {
   idle:       'bg-surface-700 hover:bg-surface-600 text-slate-300',
   listening:  'bg-brand-600 text-white ring-4 ring-brand-500/30',
-  processing: 'bg-surface-700 text-slate-400',
+  processing: 'bg-amber-900/60 text-amber-300',
   speaking:   'bg-indigo-900 text-brand-300',
 }
 
 export function VoiceInterface({ onCommand, speakText, disabled }: VoiceInterfaceProps) {
-  const { state, transcript, startListening, stopListening, speak, isSupported } = useVoice({
-    onTranscript: (text, isFinal) => {
-      if (isFinal && text.trim()) onCommand(text.trim())
-    },
-  })
+  const { state, transcript, startListening, stopListening, speak, doneProcessing, isSupported } =
+    useVoice({
+      onTranscript: useCallback(
+        (text: string, isFinal: boolean) => {
+          if (isFinal && text.trim()) {
+            onCommand(text.trim())
+            // Reset processing state after handing command off
+            setTimeout(doneProcessing, 800)
+          }
+        },
+        [onCommand, doneProcessing],
+      ),
+    })
 
-  // Speak instruction text when it changes
+  // Auto-speak new step instructions when they arrive
   useEffect(() => {
     if (speakText) speak(speakText)
-  }, [speakText]) // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speakText])
 
   if (!isSupported) {
     return (
@@ -52,13 +61,14 @@ export function VoiceInterface({ onCommand, speakText, disabled }: VoiceInterfac
 
   return (
     <div className="flex flex-col items-center gap-3">
-      {/* Mic button */}
+      {/* Mic / status button */}
       <motion.button
         type="button"
         disabled={disabled || isProcessing || isSpeaking}
         onClick={isListening ? stopListening : startListening}
         className={`relative w-14 h-14 rounded-full flex items-center justify-center transition-all cursor-pointer ${STATE_COLOR[state]}`}
         whileTap={{ scale: 0.93 }}
+        title={STATE_LABEL[state]}
       >
         {/* Pulse rings when listening */}
         {isListening && (
@@ -81,7 +91,7 @@ export function VoiceInterface({ onCommand, speakText, disabled }: VoiceInterfac
         ) : isSpeaking ? (
           <Volume2 className="w-6 h-6" />
         ) : isListening ? (
-          <MicOff className="w-6 h-6" />
+          <Mic className="w-6 h-6 animate-pulse" />
         ) : (
           <Mic className="w-6 h-6" />
         )}
@@ -90,7 +100,7 @@ export function VoiceInterface({ onCommand, speakText, disabled }: VoiceInterfac
       {/* Status label */}
       <p className="text-xs text-slate-400 text-center">{STATE_LABEL[state]}</p>
 
-      {/* Live transcript */}
+      {/* Live transcript bubble */}
       <AnimatePresence>
         {transcript && (
           <motion.div

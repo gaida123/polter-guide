@@ -21,8 +21,8 @@ const INITIAL: SessionState = {
 }
 
 export function useSession() {
-  const [state, setState]  = useState<SessionState>(INITIAL)
-  const wsRef              = useRef<HandOffWebSocket | null>(null)
+  const [state, setState] = useState<SessionState>(INITIAL)
+  const wsRef             = useRef<HandOffWebSocket | null>(null)
 
   const start = useCallback(async (userId: string, productId: string, sopId: string) => {
     const { session_id } = await createSession(userId, productId, sopId)
@@ -32,7 +32,10 @@ export function useSession() {
 
     ws.on('STEP_UPDATE', (msg) => {
       const step = msg.payload as unknown as StepPayload
-      setState((s) => ({ ...s, status: 'active', currentStep: step, totalSteps: step.total_steps, showGuardrail: false }))
+      setState((s) => ({
+        ...s, status: 'active', currentStep: step,
+        totalSteps: step.total_steps, showGuardrail: false, error: null,
+      }))
     })
     ws.on('GUARDRAIL_WARNING', (msg) => {
       const step = (msg.payload as Record<string, unknown>).step_data as StepPayload
@@ -43,10 +46,11 @@ export function useSession() {
       setState((s) => ({ ...s, showAutofill: true, autofillValue: p.autofill_value as string }))
     })
     ws.on('SESSION_COMPLETE', () => {
-      setState((s) => ({ ...s, status: 'completed' }))
+      setState((s) => ({ ...s, status: 'completed', showGuardrail: false, showAutofill: false }))
     })
     ws.on('ERROR', (msg) => {
-      setState((s) => ({ ...s, error: (msg.payload as Record<string,unknown>).detail as string }))
+      const detail = (msg.payload as Record<string, unknown>).detail as string
+      setState((s) => ({ ...s, error: detail, status: 'error' }))
     })
 
     await ws.connect()
@@ -66,14 +70,21 @@ export function useSession() {
   }, [state.currentStep])
 
   const confirmGuardrail = useCallback(() => {
+    // After user confirms a destructive step, send a VOICE_COMMAND with "confirm"
+    // so the backend runs the workflow and advances the step.
     setState((s) => ({ ...s, showGuardrail: false }))
-    if (state.currentStep) {
-      wsRef.current?.send('STEP_UPDATE', { confirmed_destructive: true, ...state.currentStep })
-    }
-  }, [state.currentStep])
+    wsRef.current?.send('VOICE_COMMAND', {
+      voice_command: 'confirm',
+      screenshot_base64: '',
+    })
+  }, [])
 
   const dismissGuardrail = useCallback(() => {
     setState((s) => ({ ...s, showGuardrail: false }))
+  }, [])
+
+  const clearError = useCallback(() => {
+    setState((s) => ({ ...s, error: null }))
   }, [])
 
   const stop = useCallback(async () => {
@@ -92,7 +103,7 @@ export function useSession() {
     confirmAutofill,
     confirmGuardrail,
     dismissGuardrail,
+    clearError,
     stop,
-    ws: wsRef.current,
   }
 }

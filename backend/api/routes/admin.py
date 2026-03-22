@@ -3,12 +3,15 @@ Admin dashboard routes — analytics, product configuration, and guardrail manag
 """
 
 import logging
+from datetime import datetime
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Header, status
 from pydantic import BaseModel
 
 from services.firebase_service import get_firestore, get_sop, list_sops_for_product
+from models import SopDocument, SopStep, StepType
 from config import settings
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -145,3 +148,125 @@ async def get_product(product_id: str):
     if not doc.exists:
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found")
     return ProductConfig(**doc.to_dict())
+
+
+# ── Demo seeding ──────────────────────────────────────────────────────────────
+
+DEMO_PRODUCT_ID = "demo-product"
+DEMO_SOP_ID     = "demo-sop-001"
+
+_FREIGHTOS_STEPS: list[dict] = [
+    {
+        "step_index": 0,
+        "step_type": StepType.CLICK,
+        "instruction_text": "Welcome to FreightOS. Let's create your first shipment. Click on Shipments in the left navigation panel.",
+        "selector_hint": "#nav-shipments",
+        "is_destructive": False,
+        "requires_autofill": False,
+    },
+    {
+        "step_index": 1,
+        "step_type": StepType.SELECT,
+        "instruction_text": "Great! Now open the Shipment Type dropdown and choose your freight method — Air, Sea, or Road.",
+        "selector_hint": "#shipment-type",
+        "is_destructive": False,
+        "requires_autofill": True,
+        "input_value": "Air Freight",
+    },
+    {
+        "step_index": 2,
+        "step_type": StepType.INPUT,
+        "instruction_text": "Enter the Origin Port. This is where your cargo will be loaded — for example, Shanghai.",
+        "selector_hint": "#origin-port",
+        "is_destructive": False,
+        "requires_autofill": True,
+        "input_value": "Shanghai",
+    },
+    {
+        "step_index": 3,
+        "step_type": StepType.INPUT,
+        "instruction_text": "Now enter the Destination. Type the port or city where the shipment needs to be delivered.",
+        "selector_hint": "#destination",
+        "is_destructive": False,
+        "requires_autofill": True,
+        "input_value": "Los Angeles",
+    },
+    {
+        "step_index": 4,
+        "step_type": StepType.INPUT,
+        "instruction_text": "Enter the Cargo Weight in kilograms. This is used to calculate freight costs.",
+        "selector_hint": "#cargo-weight",
+        "is_destructive": False,
+        "requires_autofill": True,
+        "input_value": "1200",
+    },
+    {
+        "step_index": 5,
+        "step_type": StepType.INPUT,
+        "instruction_text": "Enter the Customer name — who is this shipment for?",
+        "selector_hint": "#customer",
+        "is_destructive": False,
+        "requires_autofill": True,
+        "input_value": "Acme Corp",
+    },
+    {
+        "step_index": 6,
+        "step_type": StepType.CLICK,
+        "instruction_text": "Perfect. Now click Submit and Dispatch to finalise the shipment. This will send the order to the freight network.",
+        "selector_hint": "#submit-dispatch",
+        "is_destructive": True,
+        "requires_autofill": False,
+    },
+]
+
+
+@router.post("/seed-demo", response_model=dict)
+async def seed_demo_sop():
+    """
+    Idempotent endpoint that creates (or refreshes) the FreightOS demo SOP
+    used on the /demo page. Safe to call multiple times — re-creates with the
+    same fixed sop_id so existing demo links don't break.
+    """
+    db = get_firestore()
+
+    from services.embedding_service import embed_text, embed_sop_text
+
+    sop_name = "Process Your First Shipment"
+    sop_desc = "A guided walkthrough of the FreightOS new-shipment form, from navigation to dispatch."
+
+    sop = SopDocument(
+        sop_id=DEMO_SOP_ID,
+        product_id=DEMO_PRODUCT_ID,
+        name=sop_name,
+        description=sop_desc,
+        created_by="admin-seed",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        published=True,
+        steps=[SopStep(**s) for s in _FREIGHTOS_STEPS],
+    )
+
+    doc_data = sop.model_dump(mode="json")
+    try:
+        doc_data["_embedding"] = await embed_text(embed_sop_text(sop_name, sop_desc))
+    except Exception as exc:
+        logger.warning("Seed: could not generate embedding: %s", exc)
+
+    await db.collection("sops").document(DEMO_SOP_ID).set(doc_data)
+
+    # Also ensure the product document exists
+    await db.collection("products").document(DEMO_PRODUCT_ID).set({
+        "product_id": DEMO_PRODUCT_ID,
+        "name": "FreightOS Demo",
+        "domain": "localhost:5173",
+        "theme_color": "#6366f1",
+        "created_by": "admin-seed",
+    }, merge=True)
+
+    logger.info("Demo SOP seeded: %s / %s", DEMO_PRODUCT_ID, DEMO_SOP_ID)
+    return {
+        "seeded": True,
+        "sop_id": DEMO_SOP_ID,
+        "product_id": DEMO_PRODUCT_ID,
+        "steps": len(_FREIGHTOS_STEPS),
+    }

@@ -11,6 +11,9 @@ export function useVoice({ onTranscript, lang = 'en-US' }: UseVoiceOptions) {
   const [transcript, setTranscript] = useState('')
   const recognitionRef              = useRef<SpeechRecognition | null>(null)
   const synthRef                    = useRef<SpeechSynthesis | null>(null)
+  // Stable ref so recognition callbacks always call the latest onTranscript
+  const onTranscriptRef = useRef(onTranscript)
+  onTranscriptRef.current = onTranscript
 
   useEffect(() => {
     synthRef.current = window.speechSynthesis
@@ -32,16 +35,20 @@ export function useVoice({ onTranscript, lang = 'en-US' }: UseVoiceOptions) {
       }
       const text = final || interim
       setTranscript(text)
-      onTranscript(text, Boolean(final))
+      onTranscriptRef.current(text, Boolean(final))
+      if (final) setState('processing')  // transition through processing after final transcript
     }
 
     rec.onstart  = () => setState('listening')
-    rec.onend    = () => setState('idle')
-    rec.onerror  = () => setState('idle')
+    rec.onend    = () => setState((s) => s === 'processing' ? 'processing' : 'idle')
+    rec.onerror  = (ev) => {
+      console.warn('[Voice] recognition error:', ev.error)
+      setState('idle')
+    }
 
     recognitionRef.current = rec
     return () => rec.abort()
-  }, [lang]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lang])
 
   const startListening = useCallback(() => {
     if (state !== 'idle') return
@@ -55,15 +62,17 @@ export function useVoice({ onTranscript, lang = 'en-US' }: UseVoiceOptions) {
 
   const speak = useCallback((text: string, onEnd?: () => void) => {
     const synth = synthRef.current
-    if (!synth) return
+    if (!synth || !text.trim()) return
+    // Stop any active recognition so TTS doesn't feed back into the mic
+    recognitionRef.current?.abort()
     synth.cancel()
-    const utt     = new SpeechSynthesisUtterance(text)
-    utt.lang      = lang
-    utt.rate      = 0.95
-    utt.pitch     = 1
-    utt.onstart   = () => setState('speaking')
-    utt.onend     = () => { setState('idle'); onEnd?.() }
-    utt.onerror   = () => setState('idle')
+    const utt   = new SpeechSynthesisUtterance(text)
+    utt.lang    = lang
+    utt.rate    = 0.95
+    utt.pitch   = 1
+    utt.onstart = () => setState('speaking')
+    utt.onend   = () => { setState('idle'); onEnd?.() }
+    utt.onerror = () => setState('idle')
     setState('speaking')
     synth.speak(utt)
   }, [lang])
@@ -73,10 +82,16 @@ export function useVoice({ onTranscript, lang = 'en-US' }: UseVoiceOptions) {
     setState('idle')
   }, [])
 
+  // Called by consumers once they've sent the processed command so we can reset
+  const doneProcessing = useCallback(() => {
+    setState((s) => (s === 'processing' ? 'idle' : s))
+    setTranscript('')
+  }, [])
+
   const isSupported = Boolean(
     (window.SpeechRecognition ?? window.webkitSpeechRecognition) &&
     window.speechSynthesis,
   )
 
-  return { state, transcript, startListening, stopListening, speak, cancelSpeech, isSupported }
+  return { state, transcript, startListening, stopListening, speak, cancelSpeech, doneProcessing, isSupported }
 }
