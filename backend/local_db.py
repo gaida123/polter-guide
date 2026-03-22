@@ -55,7 +55,39 @@ def init_db() -> None:
         );
     """)
     conn.commit()
+    _migrate_schema(conn)
     conn.close()
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Add columns/tables introduced after first deploy (idempotent)."""
+    session_cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "report_generated" not in session_cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN report_generated INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.commit()
+    feed_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_feed'"
+        ).fetchall()
+    }
+    if not feed_tables:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS agent_feed (
+                id            TEXT PRIMARY KEY,
+                session_id    TEXT NOT NULL,
+                employee_name TEXT NOT NULL,
+                sop_title     TEXT NOT NULL,
+                summary       TEXT NOT NULL,
+                steps_done    INTEGER NOT NULL,
+                total_steps   INTEGER NOT NULL,
+                duration_s    REAL,
+                created_at    TEXT NOT NULL
+            );
+        """)
+        conn.commit()
 
 
 # ── SOPs ──────────────────────────────────────────────────────────────────────
