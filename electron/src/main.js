@@ -9,10 +9,10 @@ const http  = require('http')
 const isDev = process.env.ELECTRON_DEV === 'true'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const WIDGET_WIDTH  = 380
-const WIDGET_HEIGHT = 620
-const COLLAPSED_H   = 56
-const MARGIN        = 20
+const WIDGET_WIDTH  = 700
+const WIDGET_HEIGHT = 220   // bar + content
+const COLLAPSED_H   = 52    // bar only
+const MARGIN_TOP    = 28
 
 // Idle timeout: if no step advance in this many ms, fire an idle alert
 const IDLE_TIMEOUT_MS = 20_000
@@ -59,13 +59,13 @@ async function captureScreen() {
 
 // ── Create overlay window ─────────────────────────────────────────────────────
 function createWindow() {
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
+  const { width: sw } = screen.getPrimaryDisplay().workAreaSize
 
   win = new BrowserWindow({
     width:  WIDGET_WIDTH,
-    height: WIDGET_HEIGHT,
-    x: sw - WIDGET_WIDTH - MARGIN,
-    y: sh - WIDGET_HEIGHT - MARGIN,
+    height: COLLAPSED_H,
+    x: Math.floor((sw - WIDGET_WIDTH) / 2),
+    y: MARGIN_TOP,
 
     // ── Key overlay flags ──────────────────────────────────────────────────
     alwaysOnTop:        true,
@@ -117,6 +117,12 @@ app.whenReady().then(() => {
     const targetH = isCollapsed ? COLLAPSED_H : WIDGET_HEIGHT
     win.setSize(WIDGET_WIDTH, targetH, true)
     return isCollapsed
+  })
+
+  ipcMain.handle('set-expanded', (_, expanded) => {
+    if (!win) return
+    const targetH = expanded ? WIDGET_HEIGHT : COLLAPSED_H
+    win.setSize(WIDGET_WIDTH, targetH, true)
   })
 
   ipcMain.handle('set-ignore-mouse', (_, ignore) => {

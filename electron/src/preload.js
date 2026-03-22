@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('handoff', {
   // UI
   toggleCollapse:  ()         => ipcRenderer.invoke('toggle-collapse'),
+  setExpanded:     (expanded) => ipcRenderer.invoke('set-expanded', expanded),
   setIgnoreMouse:  (ignore)   => ipcRenderer.invoke('set-ignore-mouse', ignore),
   getCollapsed:    ()         => ipcRenderer.invoke('get-collapsed'),
 
