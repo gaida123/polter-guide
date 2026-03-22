@@ -207,11 +207,26 @@ export default function OverlayPage() {
     return () => document.body.classList.remove('overlay-mode')
   }, [])
 
-  // ── Tell Electron to expand/collapse window based on content ─────────────
+  // ── Tell Electron the exact pixel height of the widget ───────────────────
+  const widgetRef = useRef<HTMLDivElement>(null)
   const isExpanded = demoMode || backendStarted || sopPickerOpen
+
   useEffect(() => {
-    electronAPI?.setExpanded?.(isExpanded)
-  }, [isExpanded])
+    if (!electronAPI?.setExpanded) return
+    if (!isExpanded) {
+      electronAPI.setExpanded(52)   // collapsed bar height
+      return
+    }
+    // Measure after the animation frame so the DOM has settled
+    const measure = () => {
+      const h = widgetRef.current?.scrollHeight
+      if (h) electronAPI.setExpanded(Math.ceil(h) + 2)
+    }
+    // Run twice: immediately + after spring animation completes
+    requestAnimationFrame(measure)
+    const t = setTimeout(measure, 350)
+    return () => clearTimeout(t)
+  }, [isExpanded, demoStep, sopPickerOpen, pickerSopId, verifyHint, idleHint, isVerifying, isAnalysing, isComplete])
 
   // ── Voice ────────────────────────────────────────────────────────────────
   const { state: voiceState, startListening, stopListening, speak } = useVoice({
@@ -410,6 +425,7 @@ export default function OverlayPage() {
   return (
     <div style={style} className={`z-[9999] select-none ${inElectron ? 'w-full' : 'w-[700px]'}`}>
       <div
+        ref={widgetRef}
         className="w-full overflow-hidden rounded-2xl
                    border border-white/[0.07]
                    bg-[#111111]/95 backdrop-blur-2xl

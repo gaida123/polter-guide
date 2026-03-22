@@ -165,9 +165,15 @@ app.whenReady().then(() => {
     return isCollapsed
   })
 
-  ipcMain.handle('set-expanded', (_, expanded) => {
+  ipcMain.handle('set-expanded', (_, expandedOrHeight) => {
     if (!win) return
-    const targetH = expanded ? WIDGET_HEIGHT : COLLAPSED_H
+    let targetH
+    if (typeof expandedOrHeight === 'number') {
+      // Frontend passed an explicit pixel height
+      targetH = Math.max(COLLAPSED_H, Math.min(expandedOrHeight, 600))
+    } else {
+      targetH = expandedOrHeight ? WIDGET_HEIGHT : COLLAPSED_H
+    }
     win.setSize(WIDGET_WIDTH, targetH, true)
   })
 
