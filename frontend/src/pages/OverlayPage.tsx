@@ -7,6 +7,8 @@ import {
 import { useSession } from '../hooks/useSession'
 import { useVoice } from '../hooks/useVoice'
 
+const LOCAL_API = 'http://localhost:8080'
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface IdleHint {
   on_correct_screen:   boolean
@@ -112,6 +114,15 @@ function triggerGhostCursor(hint: IdleHint | null) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function OverlayPage() {
+  // Session from URL param (?session=<id>)
+  const urlParams    = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
+  const sessionParam = urlParams.get('session')
+
+  // Live SOP steps: either from backend session or DEMO_STEPS fallback
+  const [activeSteps, setActiveSteps] = useState<typeof DEMO_STEPS>(DEMO_STEPS)
+  const [sessionId,   setSessionId]   = useState<string | null>(sessionParam)
+  const [sessionLoading, setSessionLoading] = useState(!!sessionParam)
+
   // Demo state
   const [demoMode,    setDemoMode]    = useState(false)
   const [demoStep,    setDemoStep]    = useState(0)
@@ -130,6 +141,27 @@ export default function OverlayPage() {
   const session = useSession()
   const [backendStarted, setBackendStarted] = useState(false)
   const [query, setQuery] = useState('')
+
+  // ── Load session from backend if ?session= param present ─────────────────
+  useEffect(() => {
+    if (!sessionParam) return
+    setSessionLoading(true)
+    fetch(`${LOCAL_API}/local/sessions/${sessionParam}`)
+      .then(r => r.json())
+      .then(data => {
+        const sop = data.sop
+        if (sop?.steps?.length) {
+          setActiveSteps(sop.steps)
+          setDemoChecked(sop.steps.map(() => false))
+          setSessionId(sessionParam)
+        }
+        // Auto-start the demo when loaded from a real session
+        setDemoMode(true)
+        setDemoStep(data.current_step ?? 0)
+      })
+      .catch(() => {/* fall back to DEMO_STEPS */})
+      .finally(() => setSessionLoading(false))
+  }, [sessionParam]) // eslint-disable-line
 
   // ── Transparent body ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -159,14 +191,14 @@ export default function OverlayPage() {
   })
 
   useEffect(() => {
-    if (demoMode && DEMO_STEPS[demoStep]) speak(DEMO_STEPS[demoStep].instruction)
+    if (demoMode && activeSteps[demoStep]) speak(activeSteps[demoStep].instruction)
   }, [demoMode, demoStep]) // eslint-disable-line
 
   // ── Demo lifecycle ───────────────────────────────────────────────────────
   const startDemo = () => {
     setDemoMode(true)
     setDemoStep(0)
-    setDemoChecked(DEMO_STEPS.map(() => false))
+    setDemoChecked(activeSteps.map(() => false))
     setIdleHint(null)
     setVerifyHint(null)
     if (electronAPI) electronAPI.stepStarted(0)
@@ -187,9 +219,21 @@ export default function OverlayPage() {
     setIdleHint(null)
     electronAPI?.hideGhostCursor?.()
     setDemoChecked(prev => { const n = [...prev]; n[demoStep] = true; return n })
+
+    // Report completion to backend session if one is active
+    if (sessionId) {
+      fetch(`${LOCAL_API}/local/sessions/${sessionId}/steps/${demoStep}/complete`, { method: 'POST' })
+        .catch(() => {/* silent */})
+    }
+
     setDemoStep(prev => {
-      const next = Math.min(prev + 1, DEMO_STEPS.length - 1)
+      const next = Math.min(prev + 1, activeSteps.length - 1)
       if (electronAPI) electronAPI.stepStarted(next)
+      // Mark session finished when all steps done
+      if (next === activeSteps.length - 1 && sessionId) {
+        fetch(`${LOCAL_API}/local/sessions/${sessionId}/finish`, { method: 'POST' })
+          .catch(() => {/* silent */})
+      }
       return next
     })
   }
@@ -202,7 +246,7 @@ export default function OverlayPage() {
       try {
         const result = await electronAPI.captureScreen()
         if (result?.ok) {
-          const hint = await analyzeScreen(result.data, demoStep, DEMO_STEPS[demoStep].instruction, DEMO_STEPS[demoStep].expected)
+          const hint = await analyzeScreen(result.data, demoStep, activeSteps[demoStep].instruction, activeSteps[demoStep].expected)
           if (hint === null || hint.confidence === 0) {
             setVerifyHint({
               on_correct_screen: false,
@@ -245,7 +289,7 @@ export default function OverlayPage() {
     })
   }
 
-  const isComplete = demoMode && demoStep === DEMO_STEPS.length - 1 && demoChecked[DEMO_STEPS.length - 1]
+  const isComplete = demoMode && demoStep === activeSteps.length - 1 && demoChecked[activeSteps.length - 1]
 
   // ── Idle alert ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -255,7 +299,7 @@ export default function OverlayPage() {
         if (payload.stepIndex !== demoStep) return
         setIsAnalysing(true); setIdleHint(null)
         if (payload.screenshotData) {
-          const hint = await analyzeScreen(payload.screenshotData, demoStep, DEMO_STEPS[demoStep].instruction, DEMO_STEPS[demoStep].expected)
+          const hint = await analyzeScreen(payload.screenshotData, demoStep, activeSteps[demoStep].instruction, activeSteps[demoStep].expected)
           setIdleHint(hint)
           triggerGhostCursor(hint)
         }
@@ -268,7 +312,7 @@ export default function OverlayPage() {
       setIsAnalysing(true); setIdleHint(null)
       const result = await electronAPI.captureScreen()
       if (result?.ok) {
-        const hint = await analyzeScreen(result.data, demoStep, DEMO_STEPS[demoStep].instruction, DEMO_STEPS[demoStep].expected)
+        const hint = await analyzeScreen(result.data, demoStep, activeSteps[demoStep].instruction, activeSteps[demoStep].expected)
         setIdleHint(hint)
       }
       setIsAnalysing(false)
@@ -352,10 +396,10 @@ export default function OverlayPage() {
             {demoMode && !isComplete ? (
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-[12px] text-white/30 flex-shrink-0 tabular-nums">
-                  {demoStep + 1}/{DEMO_STEPS.length}
+                  {demoStep + 1}/{activeSteps.length}
                 </span>
                 <span className="text-[13px] text-white/80 truncate">
-                  {DEMO_STEPS[demoStep].title}
+                  {activeSteps[demoStep].title}
                 </span>
               </div>
             ) : backendStarted && backendStep ? (
@@ -474,7 +518,7 @@ export default function OverlayPage() {
                 {/* Instruction text */}
                 {demoMode && !isComplete && (
                   <p className="text-[13px] text-white/75 leading-relaxed">
-                    {DEMO_STEPS[demoStep].instruction}
+                    {activeSteps[demoStep].instruction}
                   </p>
                 )}
 
@@ -504,7 +548,7 @@ export default function OverlayPage() {
                 {/* Progress bar */}
                 {demoMode && !isComplete && (
                   <div className="flex gap-[3px]">
-                    {DEMO_STEPS.map((_, i) => (
+                    {activeSteps.map((_, i) => (
                       <div
                         key={i}
                         className={`h-[2px] flex-1 rounded-full transition-all duration-300 ${

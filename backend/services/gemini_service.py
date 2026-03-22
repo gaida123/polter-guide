@@ -289,6 +289,56 @@ async def generate_sop_steps(events: list[dict]) -> list[dict]:
         return []
 
 
+# ── SOP generation from plain-text description ────────────────────────────────
+
+_PLAIN_TEXT_SOP_PROMPT = """\
+You are an expert onboarding designer. Convert the following plain-English description of an onboarding workflow into a structured step list that a new employee can follow with guided screen assistance.
+
+Description: "{description}"
+
+Rules:
+- Break the description into clear, atomic steps (one action per step).
+- Each step has: a short title (3-5 words), a friendly instruction (max 25 words, second person), and a precise expected_screen description that includes the URL and the specific UI element that must be visible.
+- The expected_screen must be detailed enough for an AI vision model to verify: include the URL domain and the key visible element (e.g. "Google accounts sign-in page at accounts.google.com with an email text input field and 'Next' button").
+- Aim for 4-10 steps.
+
+Return a JSON array only — no markdown:
+[
+  {{
+    "title": "<3-5 word title>",
+    "instruction": "<friendly instruction, max 25 words>",
+    "expected": "<precise URL + UI element description for verification>"
+  }}
+]
+"""
+
+
+async def generate_steps_from_description(description: str) -> list[dict]:
+    """Generate SOP steps from a plain-English description."""
+    prompt = _PLAIN_TEXT_SOP_PROMPT.format(description=description.replace('"', "'"))
+    try:
+        raw    = await _call_text(prompt, max_tokens=2048)
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            for v in parsed.values():
+                if isinstance(v, list):
+                    parsed = v
+                    break
+        if isinstance(parsed, list):
+            return [
+                {
+                    "title":       s.get("title", f"Step {i+1}"),
+                    "instruction": s.get("instruction", ""),
+                    "expected":    s.get("expected", ""),
+                }
+                for i, s in enumerate(parsed)
+            ]
+        return []
+    except Exception as exc:
+        logger.error("Plain-text SOP generation failed: %s", exc)
+        return []
+
+
 # ── Screen analysis for step verification + idle hints ────────────────────────
 
 _ANALYZE_SCREEN_PROMPT = """\
