@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, Trash2, Loader2, Sparkles, Copy, Check,
   ChevronDown, ChevronUp, Users, BookOpen, BarChart3,
-  CheckCircle2, Clock, AlertCircle, X, Upload, FileText, Zap,
+  CheckCircle2, Clock, AlertCircle, X, Upload, FileText, Zap, LogOut,
 } from 'lucide-react'
+import { clearAuth } from '../LoginPage'
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
 
@@ -46,6 +48,9 @@ function formatFeedTimestamp(iso: string): string {
 const ROLES = ['General', 'Engineer', 'Designer', 'Sales', 'Marketing', 'HR', 'Finance', 'Intern']
 
 export default function AdminDashboard() {
+  const navigate = useNavigate()
+  const signOut  = () => { clearAuth(); navigate('/login', { replace: true }) }
+
   const [sops, setSops]             = useState<Sop[]>([])
   const [sessions, setSessions]     = useState<Session[]>([])
   const [feed, setFeed]             = useState<FeedEntry[]>([])
@@ -206,12 +211,22 @@ export default function AdminDashboard() {
             <p className="text-xs text-white/40">Onboarding management</p>
           </div>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 transition-colors"
-        >
-          <Plus className="w-4 h-4" /> New SOP
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={signOut}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10
+                       text-white/40 hover:text-white/70 hover:border-white/20 text-sm transition-colors"
+            title="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 transition-colors"
+          >
+            <Plus className="w-4 h-4" /> New SOP
+          </button>
+        </div>
       </div>
 
       <div className="max-w-5xl mx-auto px-8 py-8">

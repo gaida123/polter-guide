@@ -7,6 +7,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;0,14..32,800;0,14..32,900;1,14..32,400&display=swap" rel="stylesheet" />
+  <script>
+    // Update this to your deployed Vercel frontend URL once live
+    const ADMIN_URL = 'https://handoff-ai.vercel.app'
+  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
@@ -590,9 +594,9 @@
     <a href="#how">How it works</a>
     <a href="#agents">AI Agents</a>
   </div>
-  <div class="nav-right">
-    <a href="#" class="btn-ghost">Sign in</a>
-    <a href="#cta" class="btn-white">Get started</a>
+    <div class="nav-right">
+    <a id="nav-signin" href="#" class="btn-ghost">Sign in</a>
+    <a id="nav-getstarted" href="#" class="btn-white">Get started</a>
   </div>
 </nav>
 
@@ -610,7 +614,7 @@
   <p class="hero-sub">A floating AI widget that reads your screen, speaks each step aloud, and makes sure your new hires never get lost.</p>
 
   <div class="hero-btns">
-    <a href="#cta" class="btn-lg">Download for Mac</a>
+    <a id="hero-cta" href="#" class="btn-lg">Get started free</a>
     <a href="#features" class="btn-lg-ghost">See features</a>
   </div>
 
@@ -1025,7 +1029,7 @@
   <h2>Your new hires deserve<br>better than <span>a PDF.</span></h2>
   <p class="section-desc" style="margin:0 auto;text-align:center;">Upload your first SOP and have a fully guided onboarding flow running in under 5 minutes. Free to try.</p>
   <div class="cta-btns">
-    <a href="#" class="btn-lg" onclick="alert('Coming soon — reach us at hello@handoff.ai'); return false;">Download for Mac</a>
+    <a id="cta-main" href="#" class="btn-lg">Open the admin dashboard</a>
     <a href="#features" class="btn-lg-ghost">See how it works</a>
   </div>
   <p class="cta-note">No credit card required · macOS 13 or later</p>
@@ -1053,6 +1057,13 @@
     { threshold: 0.08 }
   )
   document.querySelectorAll('.reveal').forEach(el => obs.observe(el))
+
+  // Wire admin links
+  const loginUrl = ADMIN_URL + '/login'
+  document.getElementById('nav-signin').href      = loginUrl
+  document.getElementById('nav-getstarted').href  = loginUrl
+  document.getElementById('hero-cta').href        = loginUrl
+  document.getElementById('cta-main').href        = loginUrl
 </script>
 
 </body>
