@@ -5,10 +5,11 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "ELECTRON_DEV=true electron .",
+    "dev": "cross-env ELECTRON_DEV=true electron .",
     "build": "electron-builder"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "electron": "^30.5.1",
     "electron-builder": "^24.13.3"
   },

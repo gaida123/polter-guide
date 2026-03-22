@@ -79,8 +79,11 @@ class Settings(BaseSettings):
     agentverse_api_key: str = ""
 
     # ASI:One — OpenAI-compatible LLM endpoint at https://api.asi1.ai/v1
-    # Used by the Context Agent for multi-modal reasoning when set.
+    # Used by the Context Agent to polish merged step instructions when set.
     asi1_api_key: str = ""
+    asi1_base_url: str = "https://api.asi1.ai/v1"
+    asi1_model: str = "asi1-fast"
+    asi1_timeout_seconds: int = 12
 
     @property
     def use_asi1(self) -> bool:

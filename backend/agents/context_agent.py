@@ -19,6 +19,7 @@ from models.agent_models import (
     AgentError,
 )
 from models.session_models import CursorState
+from services.asi1_service import refine_step_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -166,12 +167,29 @@ async def _merge_and_broadcast(ctx: Context, session_id: str):
     knowledge: KnowledgeResponse = slot["knowledge"]
     vision: VisionResponse = slot["vision"]
     sender: str = slot["sender"]
+    original: StepRequest | None = slot.get("original_request")
+
+    instruction = knowledge.instruction_text
+    if settings.use_asi1:
+        refined = await refine_step_instruction(
+            instruction_text=knowledge.instruction_text,
+            step_index=knowledge.step_index,
+            total_steps=knowledge.total_steps,
+            voice_command=original.voice_command if original else None,
+            vision_found=vision.found,
+            vision_confidence=vision.confidence,
+            detected_error_modal=vision.detected_error_modal,
+            error_modal_text=vision.error_modal_text,
+        )
+        if refined:
+            instruction = refined
+            logger.info("ASI:One refined instruction | session=%s", session_id)
 
     step_response = StepResponse(
         session_id=session_id,
         step_index=knowledge.step_index,
         total_steps=knowledge.total_steps,
-        instruction_text=knowledge.instruction_text,
+        instruction_text=instruction,
         target_x=vision.target_x,
         target_y=vision.target_y,
         requires_autofill=knowledge.requires_autofill,
