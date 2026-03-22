@@ -183,6 +183,19 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-collapsed', () => isCollapsed)
 
+  // ── IPC: navigate overlay (StartPage → /overlay?session=…) ─────────────────
+  ipcMain.handle('navigate-overlay', (_, route) => {
+    if (!win) return false
+    const r = typeof route === 'string' && route.startsWith('/') ? route : `/${route || ''}`
+    if (isDev) {
+      win.loadURL(`http://localhost:5173${r}`)
+      return true
+    }
+    const clean = r.replace(/^\//, '')
+    win.loadFile(path.join(__dirname, '../frontend/dist/index.html'), { hash: clean })
+    return true
+  })
+
   // ── IPC: step lifecycle ──────────────────────────────────────────────────
   ipcMain.handle('step-started', (_, stepIndex) => {
     currentStepIndex = stepIndex

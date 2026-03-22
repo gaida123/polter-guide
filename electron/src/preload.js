@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('handoff', {
   onIdleAlert:     (cb) => { ipcRenderer.on('idle-alert', (_, payload) => cb(payload)) },
   offIdleAlert:    ()   => { ipcRenderer.removeAllListeners('idle-alert') },
 
+  // Navigate the overlay window (e.g. after /start creates a session)
+  navigate:        (route)   => ipcRenderer.invoke('navigate-overlay', route),
+
   // Ghost cursor control (called from overlay window)
   showGhostCursor: (payload) => ipcRenderer.invoke('show-ghost-cursor', payload),
   hideGhostCursor: ()        => ipcRenderer.invoke('hide-ghost-cursor'),

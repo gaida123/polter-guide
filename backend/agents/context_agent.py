@@ -63,6 +63,11 @@ def create_agent() -> Agent:
             f"?uri=http%3A//127.0.0.1%3A{settings.context_agent_port}"
             f"&address={ctx.agent.address}"
         )
+        ctx.logger.info(
+            "Context routing | knowledge=%s | vision=%s",
+            "local" if settings.use_local_knowledge_agent else "remote",
+            "local" if settings.use_local_vision_agent else "remote",
+        )
 
     @agent.on_message(model=StepRequest)
     async def handle_step_request(ctx: Context, sender: str, msg: StepRequest):

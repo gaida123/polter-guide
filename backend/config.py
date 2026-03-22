@@ -9,6 +9,8 @@ before the Bureau starts, without any runtime name-lookup.
 """
 
 from functools import lru_cache
+
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,8 +56,37 @@ class Settings(BaseSettings):
     vision_agent_port: int = 8003
     completion_agent_port: int = 8004
 
+    # Option C — split / remote deployment: full agent1q... address from Agentverse or another host.
+    # When set, Context uses ctx.send() to this address and run_agents skips starting that local agent.
+    knowledge_agent_address_override: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "KNOWLEDGE_AGENT_ADDRESS",
+            "KNOWLEDGE_AGENT_ADDRESS_OVERRIDE",
+        ),
+    )
+    vision_agent_address_override: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "VISION_AGENT_ADDRESS",
+            "VISION_AGENT_ADDRESS_OVERRIDE",
+        ),
+    )
+    # API-only dyno: HTTP POST target for StepRequest (must end with /submit).
+    context_agent_endpoint_override: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CONTEXT_AGENT_ENDPOINT",
+            "CONTEXT_AGENT_ENDPOINT_OVERRIDE",
+        ),
+    )
+
     @property
     def context_agent_endpoint(self) -> str:
+        raw = self.context_agent_endpoint_override.strip()
+        if raw:
+            url = raw if raw.startswith("http") else f"http://{raw}"
+            return url if url.endswith("/submit") else url.rstrip("/") + "/submit"
         return f"http://localhost:{self.context_agent_port}/submit"
 
     @property
@@ -66,19 +97,39 @@ class Settings(BaseSettings):
     def vision_agent_endpoint(self) -> str:
         return f"http://localhost:{self.vision_agent_port}/submit"
 
-    # Deterministic Fetch.ai addresses — derived once from seeds at startup.
+    # Deterministic Fetch.ai addresses — derived from seeds unless remote override is set.
     # ctx.send() requires these exact agent1q... strings.
     @property
     def knowledge_agent_address(self) -> str:
+        o = self.knowledge_agent_address_override.strip()
+        if o:
+            return o
         return _derive_agent_address(self.knowledge_agent_seed)
 
     @property
     def vision_agent_address(self) -> str:
+        o = self.vision_agent_address_override.strip()
+        if o:
+            return o
         return _derive_agent_address(self.vision_agent_seed)
 
-    # Agentverse registration — agents auto-register when this key is present.
+    @property
+    def use_local_knowledge_agent(self) -> bool:
+        return not self.knowledge_agent_address_override.strip()
+
+    @property
+    def use_local_vision_agent(self) -> bool:
+        return not self.vision_agent_address_override.strip()
+
+    # Agentverse — API key used as Bearer token for POST /connect on each uAgent.
     # Get one at https://agentverse.ai → Settings → API Keys
     agentverse_api_key: str = ""
+    # When True and agentverse_api_key is set, run_agents triggers /connect after startup delay.
+    agentverse_auto_connect: bool = True
+    # Optional Agentverse team header (x-team) for org accounts.
+    agentverse_team: str = ""
+    # Seconds to wait after spawning agent threads before calling /connect.
+    agentverse_connect_delay_seconds: float = 8.0
 
     # ASI:One — OpenAI-compatible LLM endpoint at https://api.asi1.ai/v1
     # Used by the Context Agent to polish merged step instructions when set.

@@ -23,6 +23,7 @@ import time
 import uvicorn
 
 from config import settings
+from services.agentverse_startup import schedule_agentverse_connect
 
 
 # ── Per-agent thread runner ───────────────────────────────────────────────────
@@ -50,15 +51,26 @@ def _run_agent_thread(module_path: str, start_delay: float = 0.0):
 
 # ── Public runners ────────────────────────────────────────────────────────────
 
+def _agent_threads_plan():
+    """
+    Context + Completion always run locally. Knowledge / Vision are skipped when
+    KNOWLEDGE_AGENT_ADDRESS / VISION_AGENT_ADDRESS point at remote agent1q... hosts.
+    """
+    plan = [("agents.context_agent", 0.0)]
+    delay = 1.0
+    if settings.use_local_knowledge_agent:
+        plan.append(("agents.knowledge_agent", delay))
+        delay += 1.0
+    if settings.use_local_vision_agent:
+        plan.append(("agents.vision_agent", delay))
+        delay += 1.0
+    plan.append(("agents.completion_agent", delay))
+    return plan
+
+
 def run_agents_in_background():
-    """Spawn all agent threads as daemons (API stays in foreground)."""
-    agent_modules = [
-        ("agents.context_agent",     0.0),
-        ("agents.knowledge_agent",   1.0),
-        ("agents.vision_agent",      2.0),
-        ("agents.completion_agent",  3.0),   # autonomous completion reporter
-    ]
-    for module_path, delay in agent_modules:
+    """Spawn uAgent threads as daemons (API stays in foreground)."""
+    for module_path, delay in _agent_threads_plan():
         t = threading.Thread(
             target=_run_agent_thread,
             args=(module_path, delay),
@@ -70,14 +82,8 @@ def run_agents_in_background():
 
 def run_agents_blocking():
     """Run agents in the foreground (blocks until Ctrl-C)."""
-    agent_modules = [
-        ("agents.context_agent",     0.0),
-        ("agents.knowledge_agent",   1.0),
-        ("agents.vision_agent",      2.0),
-        ("agents.completion_agent",  3.0),
-    ]
     threads = []
-    for module_path, delay in agent_modules:
+    for module_path, delay in _agent_threads_plan():
         t = threading.Thread(
             target=_run_agent_thread,
             args=(module_path, delay),
@@ -86,6 +92,7 @@ def run_agents_blocking():
         )
         t.start()
         threads.append(t)
+    schedule_agentverse_connect()
     for t in threads:
         t.join()
 
@@ -111,4 +118,5 @@ if __name__ == "__main__":
         run_agents_blocking()
     else:
         run_agents_in_background()
+        schedule_agentverse_connect()
         run_api()
