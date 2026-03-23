@@ -110,7 +110,7 @@ npm install
 cp .env.example .env   # Add your Firebase config
 npm run dev            # Development mode
 npm run build          # Production build
-npm run electron       # Launch Electron app
+npm run dev            # Launch Electron app
 ```
 
 #### Backend (FastAPI)
