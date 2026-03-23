@@ -197,7 +197,7 @@ Building agentic software requires shifting from rigid, deterministic state mach
 
 ## Built At
 
-Built at **[Hackathon Name] 2025**.
+Built at **ProduHacks 2026**.
 
 🎥 **[Watch the full demo on YouTube](https://youtube.com/watch?si=o2I0cG0U4y-U2UL3&v=hNtSjinxCUk&feature=youtu.be)**
 
